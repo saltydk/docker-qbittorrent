@@ -1,0 +1,33 @@
+image: docker:stable
+services:
+  - docker:stable-dind
+
+before_script:
+  - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
+
+.build:
+  variables:
+    TAG: "null"
+  script:
+    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${TAG}" .
+    - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
+  only:
+    - master
+
+build:master:
+  extends: .build
+  stage: build
+  variables:
+    TAG: "latest"
+  only:
+    - master
+
+build:develop:
+  extends: .build
+  stage: build
+  variables:
+    TAG: "develop"
+  only:
+    - develop
