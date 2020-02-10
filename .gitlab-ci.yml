@@ -13,8 +13,6 @@ before_script:
     - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
     - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
-  only:
-    - master
 
 build:master:
   extends: .build
@@ -23,11 +21,3 @@ build:master:
     TAG: "latest"
   only:
     - master
-
-build:develop:
-  extends: .build
-  stage: build
-  variables:
-    TAG: "develop"
-  only:
-    - develop
