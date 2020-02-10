@@ -2,7 +2,7 @@
 FROM alpine:edge as build
 
 ARG QBITTORRENT_VERSION="4.2.1"
-ARG LIBTORRENT_VERSION="1.2.3"
+ARG LIBTORRENT_VERSION="1.2.4"
 
 RUN \
   apk add --update --no-cache \
