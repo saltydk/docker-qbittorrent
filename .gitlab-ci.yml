@@ -5,19 +5,25 @@ services:
 before_script:
   - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
 
-.build:
+build:latest:
+  stage: build
   variables:
-    TAG: "null"
+    TAG: "latest"
   script:
     - docker build --pull -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
     - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${TAG}"
     - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
     - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
+  only:
+    - master
 
-build:master:
-  extends: .build
+build:qb-master:
   stage: build
   variables:
-    TAG: "latest"
+    TAG: "master"
+    QBITTORRENT_BRANCH: "master"
+  script:
+    - docker build --pull --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${TAG}" .
+    - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
   only:
     - master

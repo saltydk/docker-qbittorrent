@@ -1,8 +1,8 @@
 # Build
 FROM alpine:edge as build
 
-ARG QBITTORRENT_VERSION="4.2.1"
-ARG LIBTORRENT_VERSION="1.2.4"
+ARG QBITTORRENT_BRANCH="release-4.2.1"
+ARG LIBTORRENT_BRANCH="libtorrent-1_2_4"
 
 RUN \
   apk add --update --no-cache \
@@ -25,8 +25,9 @@ RUN \
 
 # Build libtorrent
 RUN cd \
-  && git clone --depth=1 -b libtorrent-${LIBTORRENT_VERSION//./_} https://github.com/arvidn/libtorrent.git \
+  && git clone --depth=1 -b "${LIBTORRENT_BRANCH}" https://github.com/arvidn/libtorrent.git \
   && cd libtorrent \
+  && echo "# Using libtorrent branch ${LIBTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
   && ./autotool.sh \
   && ./configure \
     --with-libiconv \
@@ -38,8 +39,9 @@ RUN cd \
 
 # Build qBittorrent
 RUN cd \
-  && git clone --depth=1 -b release-${QBITTORRENT_VERSION} https://github.com/qbittorrent/qBittorrent.git \
+  && git clone --depth=1 -b "${QBITTORRENT_BRANCH}" https://github.com/qbittorrent/qBittorrent.git \
   && cd qBittorrent \
+  && echo "# Using qbittorrent branch ${QBITTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
   && ./configure --disable-gui \
   && make -j$(nproc) \
   && make install \
