@@ -1,5 +1,6 @@
+ARG ALPINE_TAG=3.11
 # Build
-FROM alpine:edge as build
+FROM alpine:${ALPINE_TAG} as build
 
 ARG QBITTORRENT_BRANCH="release-4.2.1"
 ARG LIBTORRENT_BRANCH="libtorrent-1_2_4"
@@ -48,7 +49,7 @@ RUN cd \
   && qbittorrent-nox --version
 
 # Runtime
-FROM sc4h/alpine-s6overlay:edge
+FROM sc4h/alpine-s6overlay:${ALPINE_TAG}
 
 LABEL maintainer="horjulf"
 

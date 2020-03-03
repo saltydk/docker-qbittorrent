@@ -1,12 +1,14 @@
-image: docker:stable
-services:
-  - docker:stable-dind
-
-before_script:
-  - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
+# Build template
+.build:
+  stage: build
+  image: docker:stable
+  services:
+    - docker:stable-dind
+  before_script:
+    - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
 
 build:latest:
-  stage: build
+  extends: .build
   variables:
     TAG: "latest"
   script:
@@ -18,12 +20,13 @@ build:latest:
     - master
 
 build:qb-master:
-  stage: build
+  extends: .build
   variables:
     TAG: "master"
+    LIBTORRENT_BRANCH: "RC_1_2"
     QBITTORRENT_BRANCH: "master"
   script:
-    - docker build --pull --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${TAG}" .
+    - docker build --pull --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
   only:
     - master
