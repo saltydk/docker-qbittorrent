@@ -27,14 +27,21 @@ RUN \
 # Build libtorrent
 RUN cd \
   && git clone --depth=1 -b "${LIBTORRENT_BRANCH}" https://github.com/arvidn/libtorrent.git \
+  && _py3ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")') \
   && cd libtorrent \
-  && echo "# Using libtorrent branch ${LIBTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
+  && echo "# Using libtorrent branch ${LIBTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD) - Python ${_py3ver}" \
   && ./autotool.sh \
-  && ./configure \
-    --with-libiconv \
+  && PYTHON=$(command -v python3) \
+    ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --mandir=/usr/share/man \
+    --localstatedir=/var \
     --enable-python-binding \
-    --with-boost-python="$(ls -1 /usr/lib/libboost_python3*.so* | sort | head -1 | sed 's/.*.\/lib\(.*\)\.so.*/\1/')" \
-    PYTHON="$(which python3)" \
+    --with-boost-python="boost_python${_py3ver}" \
+    --with-libiconv \
+    --disable-debug \
+    CXXFLAGS="-std=c++14" \
   && make -j$(nproc) \
   && make install-strip
 
@@ -43,7 +50,10 @@ RUN cd \
   && git clone --depth=1 -b "${QBITTORRENT_BRANCH}" https://github.com/qbittorrent/qBittorrent.git \
   && cd qBittorrent \
   && echo "# Using qbittorrent branch ${QBITTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
-  && ./configure --disable-gui \
+  && ./configure \
+    --disable-gui \
+    --disable-debug \
+    CXXFLAGS="-std=c++14" \
   && make -j$(nproc) \
   && make install \
   && qbittorrent-nox --version
@@ -86,7 +96,7 @@ COPY ["root/", "/"]
 
 # Binaries
 COPY --from=build ["/usr/local/bin/qbittorrent-nox", "/usr/bin/qbittorrent-nox"]
-COPY --from=build ["/usr/local/lib/libtorrent-rasterbar.so.10.0.0", "/usr/lib/libtorrent-rasterbar.so.10"]
+COPY --from=build ["/usr/lib/libtorrent-rasterbar.so.10", "/usr/lib/"]
 
 # Ports
 EXPOSE 6881 6881/udp 8080
