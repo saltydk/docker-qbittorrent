@@ -38,6 +38,7 @@ RUN cd \
     --mandir=/usr/share/man \
     --localstatedir=/var \
     --enable-python-binding \
+    --with-boost-system="boost_python${_py3ver}" \
     --with-boost-python="boost_python${_py3ver}" \
     --with-libiconv \
     --disable-debug \
