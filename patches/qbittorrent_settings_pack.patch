@@ -1,17 +1,20 @@
 diff --git a/src/base/bittorrent/session.cpp b/src/base/bittorrent/session.cpp
-index 3b31b97e0..ae3d38bdc 100644
+index 3b31b97e0..cf6ccff6d 100644
 --- a/src/base/bittorrent/session.cpp
 +++ b/src/base/bittorrent/session.cpp
-@@ -1135,6 +1135,8 @@ void Session::initializeNativeSession()
+@@ -1134,7 +1134,10 @@ void Session::initializeNativeSession()
+         | lt::alert::tracker_notification;
      const std::string peerId = lt::generate_fingerprint(PEER_ID, QBT_VERSION_MAJOR, QBT_VERSION_MINOR, QBT_VERSION_BUGFIX, QBT_VERSION_BUILD);
  
-     lt::settings_pack pack;
+-    lt::settings_pack pack;
 +    // Use libtorrent high performance preset
-+    pack = lt::high_performance_seed();
++    lt::settings_pack pack = lt::high_performance_seed();
++    // https://www.libtorrent.org/reference-Settings.html#torrent_connect_boost
++    pack.set_int(lt::settings_pack::torrent_connect_boost, 60);
      pack.set_int(lt::settings_pack::alert_mask, alertMask);
      pack.set_str(lt::settings_pack::peer_fingerprint, peerId);
      pack.set_bool(lt::settings_pack::listen_system_port_fallback, false);
-@@ -1143,7 +1145,7 @@ void Session::initializeNativeSession()
+@@ -1143,7 +1146,7 @@ void Session::initializeNativeSession()
      // Speed up exit
      pack.set_int(lt::settings_pack::auto_scrape_interval, 1200); // 20 minutes
      pack.set_int(lt::settings_pack::auto_scrape_min_interval, 900); // 15 minutes
