@@ -1,3 +1,12 @@
+# Variables
+variables:
+  DOCKER_DRIVER: "overlay2"
+  DOCKER_HOST: "tcp://docker:2376"
+  DOCKER_TLS_VERIFY: 1
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_CERT_PATH: "/certs/client"
+  DOCKER_CLI_EXPERIMENTAL: "enabled"
+
 # Build template
 .build:
   stage: build
@@ -7,26 +16,43 @@
   before_script:
     - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
 
-build:latest:
+build:stable:
   extends: .build
   variables:
-    TAG: "latest"
+    DOCKER_TAG: "stable"
+    ALPINE_TAG: "3.11"
   script:
-    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
-    - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${TAG}"
+    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
     - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-    - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
+    # TAG
+    - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
+    - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
+    # latest
+    - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:latest"
+    - docker push "${CI_REGISTRY_IMAGE}:latest"
+  only:
+    - master
+
+build:stable-edge:
+  extends: .build
+  variables:
+    DOCKER_TAG: "stable-edge"
+    ALPINE_TAG: "edge"
+  script:
+    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
   only:
     - master
 
 build:qb-master:
   extends: .build
   variables:
-    TAG: "master"
+    DOCKER_TAG: "qb-master"
+    ALPINE_TAG: "edge"
     LIBTORRENT_BRANCH: "RC_1_2"
     QBITTORRENT_BRANCH: "master"
   script:
-    - docker build --pull --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${TAG}" .
-    - docker push "${CI_REGISTRY_IMAGE}:${TAG}"
+    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
   only:
     - master
