@@ -24,6 +24,8 @@ RUN \
     qt5-qttools-dev \
     zlib-dev
 
+COPY ["patches/", "/patches/"]
+
 # Build libtorrent
 RUN cd \
   && git clone --depth=1 -b "${LIBTORRENT_BRANCH}" https://github.com/arvidn/libtorrent.git \
@@ -50,6 +52,8 @@ RUN cd \
 RUN cd \
   && git clone --depth=1 -b "${QBITTORRENT_BRANCH}" https://github.com/qbittorrent/qBittorrent.git \
   && cd qBittorrent \
+  # Apply patches
+  && git apply /patches/qbittorrent_* \
   && echo "# Using qbittorrent branch ${QBITTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
   && ./configure \
     --disable-gui \
