@@ -103,8 +103,5 @@ COPY ["root/", "/"]
 COPY --from=build ["/usr/local/bin/qbittorrent-nox", "/usr/bin/qbittorrent-nox"]
 COPY --from=build ["/usr/lib/libtorrent-rasterbar.so.10", "/usr/lib/"]
 
-# Ports
-EXPOSE 6881 6881/udp 8080
-
 # Volumes
 VOLUME ["/config", "/downloads"]
