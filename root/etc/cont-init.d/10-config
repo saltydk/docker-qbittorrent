@@ -14,7 +14,7 @@ FileLogger\Enabled=true
 FileLogger\Path=/config/log
 
 [Preferences]
-Connection\PortRangeMin=6881
+Connection\PortRangeMin=54243
 Connection\ResolvePeerCountries=false
 Connection\UPnP=false
 Downloads\FinishedTorrentExportDir=/downloads/torrents
