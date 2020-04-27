@@ -2,7 +2,7 @@ ARG ALPINE_TAG=3.11
 # Build
 FROM alpine:${ALPINE_TAG} as build
 
-ARG QBITTORRENT_BRANCH="release-4.2.3"
+ARG QBITTORRENT_BRANCH="release-4.2.5"
 ARG LIBTORRENT_BRANCH="libtorrent-1_2_6"
 
 RUN \
