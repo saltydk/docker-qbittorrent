@@ -1,5 +1,5 @@
 diff --git a/src/base/bittorrent/session.cpp b/src/base/bittorrent/session.cpp
-index 1a3aaa332..0a393775a 100644
+index 1a3aaa332..341240ac8 100644
 --- a/src/base/bittorrent/session.cpp
 +++ b/src/base/bittorrent/session.cpp
 @@ -1141,7 +1141,20 @@ void Session::initializeNativeSession()
@@ -15,11 +15,11 @@ index 1a3aaa332..0a393775a 100644
 +    pack.set_int(lt::settings_pack::predictive_piece_announce, 20);
 +    pack.set_int(lt::settings_pack::send_not_sent_low_watermark, 16384);
 +    pack.set_int(lt::settings_pack::allowed_fast_set_size, 0);
-+    // 64MiB max queued disk writes
-+    pack.set_int(lt::settings_pack::max_queued_disk_bytes, 64 * 1024 * 1024);
-+    // 16KiB blocks, read 1MiB, write 16MiB
++    // 32MiB max queued disk writes
++    pack.set_int(lt::settings_pack::max_queued_disk_bytes, 32 * 1024 * 1024);
++    // 16KiB blocks, read 1MiB, write 8MiB
 +    pack.set_int(lt::settings_pack::read_cache_line_size, 64);
-+    pack.set_int(lt::settings_pack::write_cache_line_size, 1024);
++    pack.set_int(lt::settings_pack::write_cache_line_size, 512);
 +    pack.set_bool(lt::settings_pack::smooth_connects, false);
      pack.set_int(lt::settings_pack::alert_mask, alertMask);
      pack.set_str(lt::settings_pack::peer_fingerprint, peerId);
