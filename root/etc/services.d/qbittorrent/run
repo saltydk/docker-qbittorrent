@@ -5,6 +5,5 @@ UMASK_SET=${UMASK_SET:-022}
 umask "${UMASK_SET}"
 
 # Run
-HOME=/config exec \
-    s6-setuidgid abc \
-        /usr/bin/qbittorrent-nox
+exec s6-setuidgid abc \
+    /usr/bin/qbittorrent-nox

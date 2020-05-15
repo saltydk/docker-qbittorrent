@@ -69,7 +69,9 @@ FROM sc4h/alpine-s6overlay:${ALPINE_TAG}
 LABEL maintainer="horjulf"
 
 ENV \
-  QBITTORRENT_HOME="/config" \
+  HOME="/config" \
+  XDG_CONFIG_HOME="/config" \
+  XDG_DATA_HOME="/config" \
   # 3 minutes for services to exit
   S6_SERVICES_GRACETIME=180000 \
   S6_KILL_GRACETIME=3000
