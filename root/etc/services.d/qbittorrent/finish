@@ -1,0 +1,9 @@
+#!/usr/bin/execlineb -S2
+define emsg "exit code: ${1} - kill code: ${2}"
+
+ifelse { s6-test ${1} -ne 0 }
+{
+    foreground { echo "*** qBittorrent !! CRASHED !! - ${emsg} - terminating container !!***" }
+    s6-svscanctl -t /var/run/s6/services
+}
+foreground { echo "*** qBittorrent finished - ${emsg} ***" }

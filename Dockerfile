@@ -70,10 +70,9 @@ LABEL maintainer="horjulf"
 
 ENV \
   QBITTORRENT_HOME="/config" \
-  # 3 minutes for finish scripts to run
-  S6_KILL_FINISH_MAXTIME=180000 \
-  S6_SERVICES_GRACETIME=5000 \
-  S6_KILL_GRACETIME=5000
+  # 3 minutes for services to exit
+  S6_SERVICES_GRACETIME=180000 \
+  S6_KILL_GRACETIME=3000
 
 # Install packages
 RUN \

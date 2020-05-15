@@ -8,6 +8,3 @@ umask "${UMASK_SET}"
 HOME=/config exec \
     s6-setuidgid abc \
         /usr/bin/qbittorrent-nox
-
-# Sleep between restarts
-sleep 1
