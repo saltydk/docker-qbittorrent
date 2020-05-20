@@ -44,7 +44,7 @@ RUN cd \
     --with-boost-python="boost_python${_py3ver}" \
     --with-libiconv \
     --disable-debug \
-    CXXFLAGS="-std=c++14" \
+    CXXFLAGS="-std=c++14 -O3" \
   && make -j$(nproc) \
   && make install-strip
 
@@ -58,7 +58,7 @@ RUN cd \
   && ./configure \
     --disable-gui \
     --disable-debug \
-    CXXFLAGS="-std=c++14" \
+    CXXFLAGS="-std=c++14 -O3" \
   && make -j$(nproc) \
   && make install \
   && qbittorrent-nox --version
