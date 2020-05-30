@@ -1,4 +1,4 @@
-ARG ALPINE_TAG=3.11
+ARG ALPINE_TAG=3.12
 # Build
 FROM alpine:${ALPINE_TAG} as build
 

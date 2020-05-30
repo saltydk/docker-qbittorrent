@@ -20,7 +20,7 @@ build:stable:
   extends: .build
   variables:
     DOCKER_TAG: "stable"
-    ALPINE_TAG: "3.11"
+    ALPINE_TAG: "3.12"
   script:
     - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
     - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
