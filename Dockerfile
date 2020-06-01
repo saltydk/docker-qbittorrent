@@ -3,7 +3,7 @@ ARG ALPINE_TAG=3.12
 FROM alpine:${ALPINE_TAG} as build
 
 ARG QBITTORRENT_BRANCH="release-4.2.5"
-ARG LIBTORRENT_BRANCH="libtorrent-1_2_6"
+ARG LIBTORRENT_BRANCH="libtorrent-1_2_7"
 
 RUN \
   apk add --update --no-cache \
