@@ -29,22 +29,19 @@ COPY ["patches/", "/patches/"]
 # Build libtorrent
 RUN cd \
   && git clone --depth=1 -b "${LIBTORRENT_BRANCH}" https://github.com/arvidn/libtorrent.git \
-  && _py3ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")') \
   && cd libtorrent \
-  && echo "# Using libtorrent branch ${LIBTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD) - Python ${_py3ver}" \
+  && echo "# Using libtorrent branch ${LIBTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD) - Python $(python3 -V)" \
+  && _py3ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")') \
   && ./autotool.sh \
-  && PYTHON=$(command -v python3) \
-    ./configure \
-    --prefix=/usr \
-    --sysconfdir=/etc \
-    --mandir=/usr/share/man \
-    --localstatedir=/var \
+  && PYTHON=$(command -v python3) ./configure \
+    --prefix="/usr" \
+    --enable-encryption \
+    --disable-debug \
     --enable-python-binding \
-    --with-boost-system="boost_python${_py3ver}" \
     --with-boost-python="boost_python${_py3ver}" \
     --with-libiconv \
-    --disable-debug \
-    CXXFLAGS="-std=c++14 -O3" \
+    CXXFLAGS="-std=c++17 -O3" \
+    LDFLAGS="-Wl,--no-as-needed -lpthread -pthread" \
   && make -j$(nproc) \
   && make install-strip
 
@@ -52,13 +49,16 @@ RUN cd \
 RUN cd \
   && git clone --depth=1 -b "${QBITTORRENT_BRANCH}" https://github.com/qbittorrent/qBittorrent.git \
   && cd qBittorrent \
+  && echo "# Using qbittorrent branch ${QBITTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
   # Apply patches
   && git apply /patches/qbittorrent_* \
-  && echo "# Using qbittorrent branch ${QBITTORRENT_BRANCH} - Commit $(git rev-parse --short HEAD)" \
+  && ./bootstrap.sh \
   && ./configure \
+    --prefix="/usr" \
     --disable-gui \
     --disable-debug \
-    CXXFLAGS="-std=c++14 -O3" \
+    CXXFLAGS="-std=c++17 -O3" \
+    LDFLAGS="-Wl,--no-as-needed -lpthread -pthread" \
   && make -j$(nproc) \
   && make install \
   && qbittorrent-nox --version
@@ -101,7 +101,7 @@ RUN \
 COPY ["root/", "/"]
 
 # Binaries
-COPY --from=build ["/usr/local/bin/qbittorrent-nox", "/usr/bin/qbittorrent-nox"]
+COPY --from=build ["/usr/bin/qbittorrent-nox", "/usr/bin/qbittorrent-nox"]
 COPY --from=build ["/usr/lib/libtorrent-rasterbar.so.10", "/usr/lib/"]
 
 # Volumes
