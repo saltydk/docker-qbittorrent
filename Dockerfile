@@ -81,6 +81,7 @@ RUN \
   echo "**** install packages ****" \
   && apk add --no-cache --upgrade \
     bind-tools \
+    boost \
     ca-certificates \
     curl \
     mediainfo \
