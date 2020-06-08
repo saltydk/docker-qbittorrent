@@ -1,8 +1,8 @@
 diff --git a/src/base/bittorrent/session.cpp b/src/base/bittorrent/session.cpp
-index 1a3aaa332..341240ac8 100644
+index 1a3aaa332..3f11c7af1 100644
 --- a/src/base/bittorrent/session.cpp
 +++ b/src/base/bittorrent/session.cpp
-@@ -1141,7 +1141,20 @@ void Session::initializeNativeSession()
+@@ -1141,7 +1141,22 @@ void Session::initializeNativeSession()
          | lt::alert::tracker_notification;
      const std::string peerId = lt::generate_fingerprint(PEER_ID, QBT_VERSION_MAJOR, QBT_VERSION_MINOR, QBT_VERSION_BUGFIX, QBT_VERSION_BUILD);
  
@@ -20,11 +20,13 @@ index 1a3aaa332..341240ac8 100644
 +    // 16KiB blocks, read 1MiB, write 8MiB
 +    pack.set_int(lt::settings_pack::read_cache_line_size, 64);
 +    pack.set_int(lt::settings_pack::write_cache_line_size, 512);
++    // 16KiB blocks, 128MB
++    pack.set_int(lt::settings_pack::cache_size_volatile, 8192);
 +    pack.set_bool(lt::settings_pack::smooth_connects, false);
      pack.set_int(lt::settings_pack::alert_mask, alertMask);
      pack.set_str(lt::settings_pack::peer_fingerprint, peerId);
      pack.set_bool(lt::settings_pack::listen_system_port_fallback, false);
-@@ -1150,7 +1163,7 @@ void Session::initializeNativeSession()
+@@ -1150,7 +1165,7 @@ void Session::initializeNativeSession()
      // Speed up exit
      pack.set_int(lt::settings_pack::auto_scrape_interval, 1200); // 20 minutes
      pack.set_int(lt::settings_pack::auto_scrape_min_interval, 900); // 15 minutes
