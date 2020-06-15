@@ -16,13 +16,13 @@ variables:
   before_script:
     - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
 
+# Alpine
 build:stable:
   extends: .build
   variables:
     DOCKER_TAG: "stable"
-    ALPINE_TAG: "3.12"
   script:
-    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
+    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" .
     - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
     # TAG
     - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
@@ -37,9 +37,9 @@ build:stable-edge:
   extends: .build
   variables:
     DOCKER_TAG: "stable-edge"
-    ALPINE_TAG: "edge"
+    OS_TAG: "edge"
   script:
-    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker build --pull --build-arg="OS_TAG=${OS_TAG}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
   only:
     - master
@@ -47,12 +47,24 @@ build:stable-edge:
 build:qb-master:
   extends: .build
   variables:
-    DOCKER_TAG: "qb-master"
-    ALPINE_TAG: "edge"
+    DOCKER_TAG: "master"
+    OS_TAG: "edge"
     LIBTORRENT_BRANCH: "RC_1_2"
     QBITTORRENT_BRANCH: "master"
   script:
-    - docker build --pull --build-arg="ALPINE_TAG=${ALPINE_TAG}" --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker build --pull --build-arg="OS_TAG=${OS_TAG}" --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
+  only:
+    - master
+  when: manual
+
+# Debian
+build:stable-debian:
+  extends: .build
+  variables:
+    DOCKER_TAG: "stable-debian"
+  script:
+    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
   only:
     - master

@@ -1,28 +1,32 @@
-ARG OS_TAG=3.12
+ARG OS_TAG=bullseye
 # Build
-FROM sc4h/alpine-s6overlay:${OS_TAG} as build
+FROM sc4h/debian-s6overlay:${OS_TAG} as build
 
 ARG QBITTORRENT_BRANCH="release-4.2.5"
 ARG LIBTORRENT_BRANCH="libtorrent_1_2_7"
 
 RUN \
-  apk add --update --no-cache \
-    autoconf \
+  apt update \
+  && apt full-upgrade -y \
+  && apt install -y --no-install-recommends \
     automake \
-    binutils \
-    boost-dev \
-    boost-python3 \
-    build-base \
-    cppunit-dev \
+    build-essential \
+    ca-certificates \
     git \
+    libboost-chrono-dev \
+    libboost-dev \
+    libboost-python-dev \
+    libboost-random-dev \
+    libboost-system-dev \
+    libqt5svg5-dev \
+    libssl-dev \
     libtool \
-    linux-headers \
-    ncurses-dev \
-    openssl-dev \
-    python3-dev \
-    qt5-qtbase \
-    qt5-qttools-dev \
-    zlib-dev
+    openssl \
+    pkgconf \
+    python \
+    qtbase5-dev \
+    qttools5-dev \
+    zlib1g-dev
 
 COPY ["patches/", "/patches/"]
 
@@ -41,7 +45,7 @@ RUN cd \
     --with-boost-python="boost_python${_py3ver}" \
     --with-libiconv \
     CXXFLAGS="-std=c++17 -O3" \
-    LDFLAGS="-Wl,--no-as-needed -lpthread -pthread" \
+    LDFLAGS="-lpthread -pthread" \
   && make -j$(nproc) \
   && make install-strip
 
@@ -58,13 +62,13 @@ RUN cd \
     --disable-gui \
     --disable-debug \
     CXXFLAGS="-std=c++17 -O3" \
-    LDFLAGS="-Wl,--no-as-needed -lpthread -pthread" \
+    LDFLAGS="-lpthread -pthread" \
   && make -j$(nproc) \
   && make install \
   && qbittorrent-nox --version
 
 # Runtime
-FROM sc4h/alpine-s6overlay:${OS_TAG}
+FROM sc4h/debian-s6overlay:${OS_TAG}
 
 LABEL maintainer="horjulf"
 
@@ -79,23 +83,25 @@ ENV \
 # Install packages
 RUN \
   echo "**** install packages ****" \
-  && apk add --no-cache --upgrade \
-    bind-tools \
-    boost \
+  && sed -i 's/main/main contrib non-free/' /etc/apt/sources.list \
+  && apt update \
+  && apt full-upgrade -y \
+  && apt install -y --no-install-recommends \
     ca-certificates \
     curl \
+    libqt5network5 \
+    libqt5xml5 \
     mediainfo \
     openssl \
     procps \
-    qt5-qtbase \
     tar \
     unrar \
     unzip \
     wget \
-    zlib \
   && echo "**** cleanup ****" \
   && rm -rf \
     /root/.cache \
+    /var/lib/apt/lists/* \
     /tmp/*
 
 # Add root files
