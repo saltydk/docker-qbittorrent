@@ -15,6 +15,8 @@ variables:
     - docker:stable-dind
   before_script:
     - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" ${CI_REGISTRY}
+  only:
+    - master
 
 # Alpine
 build:stable:
@@ -30,8 +32,6 @@ build:stable:
     # latest
     - docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" "${CI_REGISTRY_IMAGE}:latest"
     - docker push "${CI_REGISTRY_IMAGE}:latest"
-  only:
-    - master
 
 build:stable-edge:
   extends: .build
@@ -41,8 +41,6 @@ build:stable-edge:
   script:
     - docker build --pull --build-arg="OS_TAG=${OS_TAG}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
-  only:
-    - master
 
 build:qb-master:
   extends: .build
@@ -54,8 +52,6 @@ build:qb-master:
   script:
     - docker build --pull --build-arg="OS_TAG=${OS_TAG}" --build-arg QBITTORRENT_BRANCH="${QBITTORRENT_BRANCH}" --build-arg LIBTORRENT_BRANCH="${LIBTORRENT_BRANCH}" -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
     - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
-  only:
-    - master
   when: manual
 
 # Debian
@@ -64,7 +60,5 @@ build:stable-debian:
   variables:
     DOCKER_TAG: "stable-debian"
   script:
-    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" .
+    - docker build --pull -t "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}" -f Dockerfile.debian .
     - docker push "${CI_REGISTRY_IMAGE}:${DOCKER_TAG}"
-  only:
-    - master
