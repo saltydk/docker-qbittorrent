@@ -3,7 +3,7 @@ ARG OS_TAG=bullseye
 FROM sc4h/debian-s6overlay:${OS_TAG} as build
 
 ARG QBITTORRENT_BRANCH="release-4.2.5"
-ARG LIBTORRENT_BRANCH="libtorrent-1.2.9"
+ARG LIBTORRENT_BRANCH="libtorrent-1.2.10"
 
 RUN \
   apt update \

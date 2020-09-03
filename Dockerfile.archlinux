@@ -2,7 +2,7 @@
 FROM archlinux:latest as build
 
 ARG QBITTORRENT_BRANCH="release-4.2.5"
-ARG LIBTORRENT_BRANCH="libtorrent-1.2.9"
+ARG LIBTORRENT_BRANCH="libtorrent-1.2.10"
 
 RUN \
   pacman -Syu --noconfirm --noprogressbar \
