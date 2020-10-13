@@ -107,3 +107,6 @@ COPY --from=build ["/usr/lib/libtorrent-rasterbar.so.10", "/usr/lib/"]
 
 # Volumes
 VOLUME ["/config", "/downloads"]
+
+# Expose
+EXPOSE 8080/tcp
