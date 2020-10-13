@@ -23,7 +23,7 @@ RUN \
     libtool \
     openssl \
     pkgconf \
-    python \
+    python3 \
     qtbase5-dev \
     qttools5-dev \
     zlib1g-dev
