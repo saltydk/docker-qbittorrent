@@ -2,7 +2,7 @@ ARG OS_TAG=3.12
 # Build
 FROM sc4h/alpine-s6overlay:${OS_TAG} as build
 
-ARG QBITTORRENT_BRANCH="release-4.2.5"
+ARG QBITTORRENT_BRANCH="release-4.3.0.1"
 ARG LIBTORRENT_BRANCH="libtorrent-1.2.10"
 
 RUN \
