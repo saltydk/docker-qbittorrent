@@ -20,9 +20,11 @@ RUN \
     ncurses-dev \
     openssl-dev \
     python3-dev \
+    py3-pip \
     qt5-qtbase \
     qt5-qttools-dev \
-    zlib-dev
+    zlib-dev \
+  && pip install -U setuptools wheel
 
 COPY ["patches/", "/patches/"]
 
