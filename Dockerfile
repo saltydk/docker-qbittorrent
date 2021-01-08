@@ -33,6 +33,7 @@ RUN \
     zlib \
   && echo "**** install qbittorrent-nox ****" \
   && curl -sSf -o /usr/bin/qbittorrent-nox "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-${QBITTORRENT_VERSION}_v${LIBTORRENT_VERSION}/amd64-musl-qbittorrent-nox" \
+  && chmod 755 /usr/bin/qbittorrent-nox \
   && echo "**** cleanup ****" \
   && rm -rf \
     /root/.cache \
