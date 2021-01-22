@@ -3,7 +3,7 @@ ARG OS_TAG=3.12
 # Runtime
 FROM sc4h/alpine-s6overlay:${OS_TAG}
 
-ARG QBITTORRENT_VERSION="4.3.2"
+ARG QBITTORRENT_VERSION="4.3.3"
 ARG LIBTORRENT_VERSION="1.2.12"
 
 LABEL maintainer="horjulf"
