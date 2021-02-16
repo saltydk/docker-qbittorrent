@@ -1,27 +1,9 @@
 #!/usr/bin/with-contenv sh
 
-# Config and data folders
+# Config folder
 QB_CONFIG="${XDG_CONFIG_HOME}/qBittorrent"
-QB_DATA="${XDG_DATA_HOME}/data"
-# Old config and data folders
-OLD_QB_CONFIG="${HOME}/.config/qBittorrent"
-OLD_QB_DATA="${HOME}/.local/share/data"
 # Config file
 QB_CONFIG_FILE="${QB_CONFIG}/qBittorrent.conf"
-
-# Migrate old config path to new XDG_CONFIG_HOME
-if [ -d "${OLD_QB_CONFIG}" ] && [ ! -d "${QB_CONFIG}" ]; then
-    echo "*** Migrating \"${OLD_QB_CONFIG}\" to \"${QB_CONFIG}\""
-    mv "${OLD_QB_CONFIG}" "${QB_CONFIG}" \
-    && rmdir "$(dirname "${OLD_QB_CONFIG}")"
-fi
-
-# Migrate old data path to new XDG_DATA_HOME
-if [ -d "${OLD_QB_DATA}" ] && [ ! -d "${QB_DATA}" ]; then
-    echo "*** Migrating \"${OLD_QB_DATA}\" to \"${QB_DATA}\""
-    mv "${OLD_QB_DATA}" "${QB_DATA}" \
-    && rmdir "$(dirname "${OLD_QB_DATA}")" "$(dirname "$(dirname "${OLD_QB_DATA}")")"
-fi
 
 # Folders
 mkdir -p \
