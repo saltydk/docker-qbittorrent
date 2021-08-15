@@ -35,10 +35,10 @@ RUN \
   # Find arch for archive
   ARCH=$(uname -m) && \
   QBIT_ARCH="" && \
-  [ "${ARCH}" = "x86_64" ] && QBIT_ARCH="x86_64-qbittorrent-nox" || true && \
-  [ "${ARCH}" = "aarch64" ] && QBIT_ARCH="aarch64-qbittorrent-nox" || true && \
-  [ "${ARCH}" = "armv7l" ] && QBIT_ARCH="armhf-qbittorrent-nox" || true && \
-  && curl -sSf -L -o /usr/bin/qbittorrent-nox "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-${QBITTORRENT_VERSION}_v${LIBTORRENT_VERSION}/${QBIT_ARCH}" \
+  [ "${ARCH}" = "x86_64" ] && QBIT_ARCH="x86_64" || true && \
+  [ "${ARCH}" = "aarch64" ] && QBIT_ARCH="aarch64" || true && \
+  [ "${ARCH}" = "armv7l" ] && QBIT_ARCH="armhf" || true && \
+  && curl -sSf -L -o /usr/bin/qbittorrent-nox "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-${QBITTORRENT_VERSION}_v${LIBTORRENT_VERSION}/${QBIT_ARCH}-qbittorrent-nox" \
   && chmod 755 /usr/bin/qbittorrent-nox \
   && echo "**** cleanup ****" \
   && rm -rf \
