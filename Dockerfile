@@ -1,4 +1,4 @@
-ARG OS_TAG=3.13
+ARG OS_TAG=latest
 
 # Runtime
 FROM saltydk/alpine-s6overlay:${OS_TAG}
