@@ -1,12 +1,12 @@
 ARG OS_TAG=3.13
 
 # Runtime
-FROM sc4h/alpine-s6overlay:${OS_TAG}
+FROM saltydk/alpine-s6overlay:${OS_TAG}
 
-ARG QBITTORRENT_VERSION="4.3.5"
-ARG LIBTORRENT_VERSION="1.2.13"
+ARG QBITTORRENT_VERSION="4.3.7"
+ARG LIBTORRENT_VERSION="1.2.14"
 
-LABEL maintainer="horjulf"
+LABEL maintainer="salty"
 
 ENV \
   HOME="/config" \
