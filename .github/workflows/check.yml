@@ -8,6 +8,8 @@ on:
 jobs:
   find-latest-version:
     runs-on: ubuntu-latest
+    outputs:
+      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
       - id: set-latest-version
         run: echo "::set-output name=qbt-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/latest | jq -r '.tag_name')"
