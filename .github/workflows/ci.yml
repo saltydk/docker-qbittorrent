@@ -8,8 +8,18 @@ on:
       - 'master'
 
 jobs:
+  find-latest-version:
+    runs-on: ubuntu-latest
+    outputs:
+      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-latest-version
+        run: echo "::set-output name=qbt-version::$(head -6 Dockerfile | tail -1 | cut -d'"' -f2)"
+
   docker:
     runs-on: ubuntu-latest
+    needs: find-latest-version
     steps:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
@@ -29,4 +39,6 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          tags: saltydk/qbittorrent:latest
+          tags: |
+            saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
+            saltydk/qbittorrent:latest
