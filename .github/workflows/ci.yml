@@ -44,3 +44,8 @@ jobs:
           tags: |
             saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
             saltydk/qbittorrent:latest
+
+      - uses: sarisia/actions-status-discord@v1
+        if: always()
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
