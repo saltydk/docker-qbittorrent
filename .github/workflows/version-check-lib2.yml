@@ -1,4 +1,4 @@
-name: version-check
+name: version-check-lib2
 
 on:
   workflow_dispatch:
