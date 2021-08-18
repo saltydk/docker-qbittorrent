@@ -3,7 +3,7 @@ ARG OS_TAG=latest
 # Runtime
 FROM saltydk/alpine-s6overlay:${OS_TAG}
 
-ARG QBITTORRENT_RELEASE="release-4.3.7_v2.0.4"
+ARG QBITTORRENT_RELEASE="release-4.3.6_v2.0.4"
 
 LABEL maintainer="salty"
 

@@ -6,7 +6,7 @@ on:
     paths-ignore:
       - '.github/**'
       - '*.md'
-      - 'Dockerfile-lib2'
+      - 'Dockerfile.lib2'
     branches:
       - 'master'
 
