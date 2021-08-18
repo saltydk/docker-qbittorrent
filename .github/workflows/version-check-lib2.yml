@@ -1,4 +1,4 @@
-name: version-check
+name: version-check-lib2
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
       - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/latest | jq -r '.tag_name' | tr -d '\n')"
+        run: echo "::set-output name=qbt-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases | jq -r 'map(select(.prerelease)) | first | .tag_name' | tr -d '\n')"
 
   update:
     runs-on: ubuntu-latest
@@ -22,7 +22,7 @@ jobs:
       with:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
-        ref: master
+        ref: libtorrent2
     - name: Create local changes
       run: |
         sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="${{ needs.find-latest-version.outputs.qbt-version }}"/' Dockerfile
@@ -35,4 +35,4 @@ jobs:
       uses: ad-m/github-push-action@master
       with:
         github_token: ${{ github.token }}
-        branch: ${{ github.ref }}
+        branch: libtorrent2
