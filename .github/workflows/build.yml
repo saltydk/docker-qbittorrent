@@ -3,8 +3,9 @@ name: build
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'latest.Dockerfile'
+    paths-ignore:
+      - '.github/**'
+      - '*.md'
     branches:
       - 'master'
 
@@ -16,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(head -6 latest.Dockerfile | tail -1 | cut -d'"' -f2)"
+        run: echo "::set-output name=qbt-version::$(head -6 Dockerfile | tail -1 | cut -d'"' -f2)"
 
   docker:
     runs-on: ubuntu-latest
@@ -40,7 +41,6 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          file: "{context}/latest.Dockerfile"
           tags: |
             saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
             saltydk/qbittorrent:latest
