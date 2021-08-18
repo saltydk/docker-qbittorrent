@@ -6,7 +6,7 @@ on:
     paths-ignore:
       - '.github/**'
       - '*.md'
-      - 'Dockerfile'
+      - 'latest.Dockerfile'
     branches:
       - 'master'
 
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(head -6 Dockerfile.lib2 | tail -1 | cut -d'"' -f2)"
+        run: echo "::set-output name=qbt-version::$(head -6 lib2.Dockerfile | tail -1 | cut -d'"' -f2)"
 
   docker:
     runs-on: ubuntu-latest
@@ -42,7 +42,7 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          file: "{context}/Dockerfile-lib2"
+          file: "{context}/lib2.Dockerfile"
           tags: |
             saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
             saltydk/qbittorrent:libtorrent2
