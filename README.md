@@ -2,7 +2,7 @@
 
 ```shell
 docker run -d \
-  --name=qb \
+  --name=qbittorrent \
   --net=host \
   -e PUID=1001 \
   -e PGID=1001 \
@@ -10,5 +10,5 @@ docker run -d \
   -v /path/to/downloads:/downloads \
   --restart on-failure \
   --stop-timeout 300 \
-  sc4h/qbittorrent:latest
+  saltydk/qbittorrent:latest
 ```
