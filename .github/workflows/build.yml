@@ -3,10 +3,8 @@ name: build
 on:
   workflow_dispatch:
   push:
-    paths-ignore:
-      - '.github/**'
-      - '*.md'
-      - '**/lib2.Dockerfile'
+    paths:
+      - 'latest.Dockerfile'
     branches:
       - 'master'
 
