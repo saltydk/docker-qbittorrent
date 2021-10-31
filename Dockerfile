@@ -19,10 +19,7 @@ ENV \
 RUN \
   # Find arch for archive
   ARCH=$(uname -m) && \
-  QBIT_ARCH="" && \
-  [ "${ARCH}" = "x86_64" ] && QBIT_ARCH="x86_64" || true && \
-  [ "${ARCH}" = "aarch64" ] && QBIT_ARCH="aarch64" || true && \
-  [ "${ARCH}" = "armv7l" ] && QBIT_ARCH="armhf" || true && \
+  QBIT_ARCH="x86_64" && \
   echo "**** install packages ****" \
   && apk add --no-cache --upgrade \
     bind-tools \
