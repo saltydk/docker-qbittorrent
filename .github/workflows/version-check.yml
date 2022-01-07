@@ -19,7 +19,7 @@ jobs:
     outputs:
       qbt-libtorrent2-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
-      - id: set-latest-version
+      - id: set-latest-libtorrent2-version
         run: echo "::set-output name=qbt-libtorrent2-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases | jq -r 'map(select(.prerelease)) | first | .tag_name' | tr -d '\n')"
 
   update:
@@ -58,14 +58,14 @@ jobs:
         ref: libtorrent2
     - name: Create local changes
       run: |
-        [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
+        [ ! -z "$QBT_LIBTORRENT2_VERSION" ] && [[ "$QBT_LIBTORRENT2_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT2_VERSION}'"/' Dockerfile
       env:
-        QBT_VERSION: ${{ needs.find-latest-version.outputs.qbt-version }}
+        QBT_VERSION: ${{ needs.find-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-version.outputs.qbt-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
