@@ -14,6 +14,14 @@ jobs:
       - id: set-latest-version
         run: echo "::set-output name=qbt-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/latest | jq -r '.tag_name' | tr -d '\n')"
 
+  find-latest-libtorrent2-version:
+    runs-on: ubuntu-latest
+    outputs:
+      qbt-libtorrent2-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+    steps:
+      - id: set-latest-version
+        run: echo "::set-output name=qbt-libtorrent2-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases | jq -r 'map(select(.prerelease)) | first | .tag_name' | tr -d '\n')"
+
   update:
     runs-on: ubuntu-latest
     needs: find-latest-version
@@ -23,6 +31,31 @@ jobs:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
         ref: master
+    - name: Create local changes
+      run: |
+        [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
+      env:
+        QBT_VERSION: ${{ needs.find-latest-version.outputs.qbt-version }}
+    - name: Commit files
+      run: |
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git commit -m "Update to ${{ needs.find-latest-version.outputs.qbt-version }}" -a || echo "Nothing to update"
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GH_TOKEN }}
+        branch: ${{ github.ref }}
+
+  update-libtorrent2:
+    runs-on: ubuntu-latest
+    needs: find-latest-libtorrent2-version
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
+        fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
+        ref: libtorrent2
     - name: Create local changes
       run: |
         [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
