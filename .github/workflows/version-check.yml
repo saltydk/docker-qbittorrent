@@ -17,7 +17,7 @@ jobs:
   find-latest-libtorrent2-version:
     runs-on: ubuntu-latest
     outputs:
-      qbt-libtorrent2-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+      qbt-libtorrent2-version: ${{ steps.set-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
     steps:
       - id: set-latest-libtorrent2-version
         run: echo "::set-output name=qbt-libtorrent2-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases | jq -r 'map(select(.prerelease)) | first | .tag_name' | tr -d '\n')"
