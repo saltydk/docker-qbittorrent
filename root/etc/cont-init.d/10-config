@@ -18,8 +18,10 @@ if [ ! -f "${QB_CONFIG_FILE}" ]; then
 FileLogger\Enabled=true
 FileLogger\Path=/config/log
 
+[BitTorrent]
+Session\Port=54243
+
 [Preferences]
-Connection\PortRangeMin=54243
 Connection\ResolvePeerCountries=false
 Connection\UPnP=false
 Downloads\FinishedTorrentExportDir=/downloads/torrents
