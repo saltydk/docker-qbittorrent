@@ -7,7 +7,7 @@ on:
       - '.github/**'
       - '*.md'
     branches:
-      - 'master'
+      - 'libtorrent2'
 
 jobs:
   find-latest-version:
