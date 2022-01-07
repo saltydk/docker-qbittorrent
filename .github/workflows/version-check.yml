@@ -60,7 +60,7 @@ jobs:
       run: |
         [ ! -z "$QBT_LIBTORRENT2_VERSION" ] && [[ "$QBT_LIBTORRENT2_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT2_VERSION}'"/' Dockerfile
       env:
-        QBT_VERSION: ${{ needs.find-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
+        QBT_LIBTORRENT2_VERSION: ${{ needs.find-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
