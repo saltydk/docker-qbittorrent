@@ -20,18 +20,21 @@ FileLogger\Path=/config/log
 
 [BitTorrent]
 Session\Port=54243
+Session\DefaultSavePath=/downloads/torrents
+Session\TempPath=/downloads/incoming
+Session\Preallocation=true
+
+[Network]
+PortForwardingEnabled=false
+Proxy\OnlyForTorrents=false
 
 [Preferences]
 Connection\ResolvePeerCountries=false
-Connection\UPnP=false
-Downloads\FinishedTorrentExportDir=/downloads/torrents
-Downloads\PreAllocation=true
-Downloads\SavePath=/downloads/incoming
 General\Locale=en
-General\UseRandomPort=false
 WebUI\Address=*
 WebUI\Port=8080
 WebUI\LocalHostAuth=true
+WebUI\UseUPnP=false
 EOL
 fi
 
