@@ -34,10 +34,6 @@ RUN \
   && curl -sSf -L -o /usr/bin/qbittorrent-nox \
     "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${QBITTORRENT_RELEASE}/x86_64-icu-qbittorrent-nox" \
   && chmod 755 /usr/bin/qbittorrent-nox \
-  && mkdir -p \
-    /app \
-    /config \
-    /defaults \
   && echo "**** cleanup ****" \
   && rm -rf \
     /root/.cache \
