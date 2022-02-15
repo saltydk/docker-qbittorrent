@@ -20,8 +20,8 @@ FileLogger\Path=/config/log
 
 [BitTorrent]
 Session\Port=54243
-Session\DefaultSavePath=/downloads/torrents
-Session\TempPath=/downloads/incoming
+Session\DefaultSavePath=/downloads/torrents/qbittorrent/completed
+Session\TempPath=/downloads/torrents/qbittorrent/incoming
 Session\Preallocation=true
 
 [Network]
