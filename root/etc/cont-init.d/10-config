@@ -19,19 +19,40 @@ FileLogger\Enabled=true
 FileLogger\Path=/config/log
 
 [BitTorrent]
-Session\Port=54243
+Session\AsyncIOThreadsCount=4
+Session\BTProtocol=TCP
+Session\CoalesceReadWrite=false
+Session\ConnectionSpeed=100
+Session\DefaultSavePath=/mnt/unionfs/downloads/torrents/qbittorrent/completed
+Session\DisableAutoTMMByDefault=false
+Session\DisableAutoTMMTriggers\CategorySavePathChanged=false
+Session\FilePoolSize=5000
+Session\MultiConnectionsPerIp=true
+Session\PieceExtentAffinity=true
+Session\Port=56881
+Session\Preallocation=true
+Session\SendBufferLowWatermark=1024
+Session\SendBufferWatermark=10240
+Session\SendBufferWatermarkFactor=250
+Session\SocketBacklogSize=1000
+Session\SuggestMode=true
+Session\TempPath=/mnt/unionfs/downloads/torrents/qbittorrent/incoming
+
+[Network]
+PortForwardingEnabled=false
+Proxy\OnlyForTorrents=false
 
 [Preferences]
+Bittorrent\MaxConnecs=-1
+Bittorrent\MaxConnecsPerTorrent=-1
+Bittorrent\MaxUploads=-1
+Bittorrent\MaxUploadsPerTorrent=-1
 Connection\ResolvePeerCountries=false
-Connection\UPnP=false
-Downloads\FinishedTorrentExportDir=/downloads/torrents
-Downloads\PreAllocation=true
-Downloads\SavePath=/downloads/incoming
 General\Locale=en
-General\UseRandomPort=false
 WebUI\Address=*
 WebUI\Port=8080
 WebUI\LocalHostAuth=true
+WebUI\UseUPnP=false
 EOL
 fi
 
