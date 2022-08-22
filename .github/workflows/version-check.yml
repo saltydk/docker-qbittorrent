@@ -12,19 +12,29 @@ jobs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
       - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/latest | jq -r '.tag_name' | tr -d '\n')"
+        run: echo "::set-output name=qbt-version::$(curl -fsSL https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json | jq -r '.qbittorrent')"
 
-  find-latest-libtorrent1-version:
+  find-latest-release:
     runs-on: ubuntu-latest
+    needs: find-latest-version
+    outputs:
+      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+    steps:
+      - id: set-latest-version
+        run: echo "::set-output name=qbt-version::$(curl -fsSL "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases" | jq -r 'first(.[] | select(.tag_name | contains ("release-'"${{ needs.find-latest-version.outputs.qbt-version }}"_v2.'")) | .tag_name)')"
+
+  find-latest-libtorrent1-release:
+    runs-on: ubuntu-latest
+    needs: find-latest-version
     outputs:
       qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
     steps:
       - id: set-latest-libtorrent1-version
-        run: echo "::set-output name=qbt-libtorrent1-version::$(curl https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases | jq -r 'map(select(.prerelease)) | first | .tag_name' | tr -d '\n')"
+        run: echo "::set-output name=qbt-libtorrent1-version::$(curl -fsSL "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases" | jq -r 'first(.[] | select(.tag_name | contains ("release-'"${{ needs.find-latest-version.outputs.qbt-version }}"_v1.2.'")) | .tag_name)')"
 
   update:
     runs-on: ubuntu-latest
-    needs: find-latest-version
+    needs: find-latest-release
     steps:
     - uses: actions/checkout@v2
       with:
@@ -35,12 +45,12 @@ jobs:
       run: |
         [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
       env:
-        QBT_VERSION: ${{ needs.find-latest-version.outputs.qbt-version }}
+        QBT_VERSION: ${{ needs.find-latest-release.outputs.qbt-version }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-version.outputs.qbt-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-version }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
@@ -49,7 +59,7 @@ jobs:
 
   update-libtorrent1:
     runs-on: ubuntu-latest
-    needs: find-latest-libtorrent1-version
+    needs: find-latest-libtorrent1-release
     steps:
     - uses: actions/checkout@v2
       with:
@@ -60,12 +70,12 @@ jobs:
       run: |
         [ ! -z "$QBT_LIBTORRENT1_VERSION" ] && [[ "$QBT_LIBTORRENT1_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT1_VERSION}'"/' Dockerfile
       env:
-        QBT_LIBTORRENT1_VERSION: ${{ needs.find-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
+        QBT_LIBTORRENT1_VERSION: ${{ needs.find-latest-libtorrent1-release.outputs.qbt-libtorrent1-version }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-libtorrent1-release.outputs.qbt-libtorrent1-version }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
