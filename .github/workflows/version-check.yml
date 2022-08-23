@@ -3,7 +3,7 @@ name: version-check
 on:
   workflow_dispatch:
   schedule:
-    - cron:  '0 */3 * * *'
+    - cron:  '0 */6 * * *'
 
 jobs:
   find-latest-version:
