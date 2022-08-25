@@ -3,7 +3,7 @@ ARG OS_TAG=latest
 # Runtime
 FROM saltydk/alpine-s6overlay:${OS_TAG}
 
-ARG QBITTORRENT_RELEASE="release-4.4.4_v1.2.17"
+ARG QBITTORRENT_RELEASE="release-4.3.9_v1.2.17"
 
 LABEL maintainer="salty"
 
@@ -32,7 +32,7 @@ RUN \
     zlib \
   && echo "**** install qbittorrent-nox ****" \
   && curl -sSf -L -o /usr/bin/qbittorrent-nox \
-    "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${QBITTORRENT_RELEASE}/x86_64-qbittorrent-nox" \
+    "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/download/${QBITTORRENT_RELEASE}/x86_64-qbittorrent-nox" \
   && chmod 755 /usr/bin/qbittorrent-nox \
   && echo "**** cleanup ****" \
   && rm -rf \

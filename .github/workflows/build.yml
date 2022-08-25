@@ -7,7 +7,7 @@ on:
       - '.github/**'
       - '*.md'
     branches:
-      - 'libtorrent1'
+      - 'legacy'
 
 jobs:
   find-latest-version:
@@ -43,7 +43,7 @@ jobs:
           push: true
           tags: |
             saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
-            saltydk/qbittorrent:libtorrent1
+            saltydk/qbittorrent:legacy
 
       - uses: sarisia/actions-status-discord@v1
         if: always()
