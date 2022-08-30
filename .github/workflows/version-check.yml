@@ -40,7 +40,7 @@ jobs:
       with:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
-        ref: master
+        ref: libtorrent2
     - name: Create local changes
       run: |
         [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
@@ -55,7 +55,7 @@ jobs:
       uses: ad-m/github-push-action@master
       with:
         github_token: ${{ secrets.GH_TOKEN }}
-        branch: master
+        branch: libtorrent2
 
   update-libtorrent1:
     runs-on: ubuntu-latest
