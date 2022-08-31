@@ -6,31 +6,19 @@ on:
     - cron:  '0 */6 * * *'
 
 jobs:
-  find-latest-version:
-    runs-on: ubuntu-latest
-    outputs:
-      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
-      qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
-    steps:
-      - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(curl -fsSL https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json | jq -r '.qbittorrent')"
-      - id: set-latest-legacy-version
-        run: echo "::set-output name=qbt-legacy-version::$(curl -fsSL https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json | jq -r '.qbittorrent')"
-
   find-latest-release:
     runs-on: ubuntu-latest
-    needs: find-latest-version
     outputs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
       qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
       qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
     steps:
       - id: set-latest-version
-        run: echo "::set-output name=qbt-version::$(curl -fsSL "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases" | jq -r 'first(.[] | select(.tag_name | contains ("release-'"${{ needs.find-latest-version.outputs.qbt-version }}"_v2.'")) | .tag_name)')"
+        run: echo "::set-output name=qbt-libtorrent2-version::$(curl -sL https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_2_0)"')"
       - id: set-latest-libtorrent1-version
-        run: echo "::set-output name=qbt-libtorrent1-version::$(curl -fsSL "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases" | jq -r 'first(.[] | select(.tag_name | contains ("release-'"${{ needs.find-latest-version.outputs.qbt-version }}"_v1.2.'")) | .tag_name)')"
+        run: echo "::set-output name=qbt-libtorrent1-version::$(curl -sL https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')"
       - id: set-latest-legacy-version
-        run: echo "::set-output name=qbt-legacy-version::$(curl -fsSL "https://api.github.com/repos/userdocs/qbittorrent-nox-static-legacy/releases" | jq -r 'first(.[] | select(.tag_name | contains ("release-'"${{ needs.find-latest-version.outputs.qbt-legacy-version }}"_v1.2.'")) | .tag_name)')"
+        run: echo "::set-output name=qbt-legacy-version::$(curl -sL https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')"
 
   update:
     runs-on: ubuntu-latest
@@ -45,12 +33,12 @@ jobs:
       run: |
         [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
       env:
-        QBT_VERSION: ${{ needs.find-latest-release.outputs.qbt-version }}
+        QBT_VERSION: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
