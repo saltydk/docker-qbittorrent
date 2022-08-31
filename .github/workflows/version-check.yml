@@ -9,7 +9,7 @@ jobs:
   find-latest-release:
     runs-on: ubuntu-latest
     outputs:
-      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+      qbt-libtorrent2-version: ${{ steps.set-latest-version-libtorrent2.outputs.qbt-version }}
       qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
       qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
     steps:
@@ -20,7 +20,7 @@ jobs:
       - id: set-latest-legacy-version
         run: echo "::set-output name=qbt-legacy-version::$(curl -sL https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')"
 
-  update:
+  update-libtorrent2:
     runs-on: ubuntu-latest
     needs: find-latest-release
     steps:
