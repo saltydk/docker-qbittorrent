@@ -9,7 +9,7 @@ jobs:
   find-latest-release:
     runs-on: ubuntu-latest
     outputs:
-      qbt-libtorrent2-version: ${{ steps.set-latest-libtorrent2-version.outputs.qbt-version }}
+      qbt-libtorrent2-version: ${{ steps.set-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
       qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
       qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
     steps:
