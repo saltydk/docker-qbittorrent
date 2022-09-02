@@ -23,7 +23,6 @@ Session\AsyncIOThreadsCount=4
 Session\BTProtocol=TCP
 Session\CoalesceReadWrite=false
 Session\ConnectionSpeed=100
-Session\DefaultSavePath=/mnt/unionfs/downloads/torrents/qbittorrent/completed
 Session\DisableAutoTMMByDefault=false
 Session\DisableAutoTMMTriggers\CategorySavePathChanged=false
 Session\FilePoolSize=5000
@@ -36,7 +35,6 @@ Session\SendBufferWatermark=10240
 Session\SendBufferWatermarkFactor=250
 Session\SocketBacklogSize=1000
 Session\SuggestMode=true
-Session\TempPath=/mnt/unionfs/downloads/torrents/qbittorrent/incoming
 
 [Network]
 PortForwardingEnabled=false
@@ -48,6 +46,8 @@ Bittorrent\MaxConnecsPerTorrent=-1
 Bittorrent\MaxUploads=-1
 Bittorrent\MaxUploadsPerTorrent=-1
 Connection\ResolvePeerCountries=false
+Downloads\SavePath=/mnt/unionfs/downloads/torrents/qbittorrent/completed
+Downloads\TempPath=/mnt/unionfs/downloads/torrents/qbittorrent/incoming
 General\Locale=en
 WebUI\Address=*
 WebUI\Port=8080
