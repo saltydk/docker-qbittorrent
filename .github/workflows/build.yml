@@ -15,7 +15,7 @@ jobs:
     outputs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - id: set-latest-version
         run: echo "qbt-version=$(head -6 Dockerfile | tail -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
 
@@ -24,20 +24,20 @@ jobs:
     needs: find-latest-version
     steps:
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
+        uses: docker/setup-qemu-action@v2
  
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
 
       - name: Login to DockerHub
-        uses: docker/login-action@v1 
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
         id: docker_build
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v3
         with:
           platforms: linux/amd64
           push: true
