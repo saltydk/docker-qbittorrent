@@ -19,6 +19,10 @@ jobs:
         run: echo "qbt-libtorrent1-version=$(curl -sL https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')" >> $GITHUB_OUTPUT
       - id: set-latest-legacy-version
         run: echo "qbt-legacy-version=$(curl -sL https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')" >> $GITHUB_OUTPUT
+      - id: set-latest-legacy-revision
+        run: echo "qbt-legacy-revision=$(jq -r '.revision' < <(curl -sL "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json"))" >> $GITHUB_OUTPUT
+      - id: set-latest-revision
+        run: echo "qbt-latest-revision=$(jq -r '.revision' < <(curl -sL "https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json"))" >> $GITHUB_OUTPUT
 
   update-libtorrent2:
     runs-on: ubuntu-latest
@@ -34,6 +38,11 @@ jobs:
         [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
       env:
         QBT_VERSION: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}
+    - name: Create local changes
+      run: |
+        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+      env:
+        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-latest-revision }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -59,6 +68,11 @@ jobs:
         [ ! -z "$QBT_LIBTORRENT1_VERSION" ] && [[ "$QBT_LIBTORRENT1_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT1_VERSION}'"/' Dockerfile
       env:
         QBT_LIBTORRENT1_VERSION: ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}
+    - name: Create local changes
+      run: |
+        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+      env:
+        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-latest-revision }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -84,6 +98,11 @@ jobs:
         [ ! -z "$QBT_LEGACY_VERSION" ] && [[ "$QBT_LEGACY_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LEGACY_VERSION}'"/' Dockerfile
       env:
         QBT_LEGACY_VERSION: ${{ needs.find-latest-release.outputs.qbt-legacy-version }}
+    - name: Create local changes
+      run: |
+        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+      env:
+        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-legacy-revision }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
