@@ -12,7 +12,7 @@ jobs:
       qbt-libtorrent2-version: ${{ steps.set-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
       qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
       qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
-      qbt-legacy-revision: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-revision }}
+      qbt-legacy-revision: ${{ steps.set-latest-legacy-revision.outputs.qbt-legacy-revision }}
       qbt-latest-revision: ${{ steps.set-latest-revision.outputs.qbt-latest-revision }}
     steps:
       - id: set-latest-libtorrent2-version
