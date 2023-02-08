@@ -49,7 +49,7 @@ jobs:
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}-${{ needs.find-latest-release.outputs.qbt-latest-revision }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
@@ -79,7 +79,7 @@ jobs:
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}-${{ needs.find-latest-release.outputs.qbt-latest-revision }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
@@ -109,7 +109,7 @@ jobs:
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-legacy-version }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-legacy-version }}-${{ needs.find-latest-release.outputs.qbt-legacy-revision }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
