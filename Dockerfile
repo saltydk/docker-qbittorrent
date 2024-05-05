@@ -30,13 +30,15 @@ RUN \
     unrar \
     unzip \
     wget \
-    zlib \
-  && echo "**** install qbittorrent-nox ****" \
-  && curl -sSf -L -o /usr/bin/qbittorrent-nox \
-    "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${QBITTORRENT_RELEASE}/x86_64-qbittorrent-nox" \
-  && chmod 755 /usr/bin/qbittorrent-nox \
-  && echo "**** cleanup ****" \
-  && rm -rf \
+    zlib
+
+RUN \
+  echo "**** install qbittorrent-nox ****" && \
+  curl -sSf -L -o /usr/bin/qbittorrent-nox \
+    "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${QBITTORRENT_RELEASE}/x86_64-qbittorrent-nox" && \
+  chmod 755 /usr/bin/qbittorrent-nox && \
+  echo "**** cleanup ****" && \
+  rm -rf \
     /root/.cache \
     /tmp/*
 
