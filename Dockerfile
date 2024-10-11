@@ -27,7 +27,6 @@ RUN \
     openssl \
     procps \
     tar \
-    unrar \
     unzip \
     wget \
     zlib
