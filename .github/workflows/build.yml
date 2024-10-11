@@ -15,7 +15,7 @@ jobs:
     outputs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: set-latest-version
         run: echo "qbt-version=$(head -6 Dockerfile | tail -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
 
