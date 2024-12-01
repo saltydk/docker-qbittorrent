@@ -51,11 +51,31 @@ jobs:
           fi
 
           # Extract and set outputs using GitHub Actions syntax
-          echo "qbt-libtorrent2-version=release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_2_0)" >> $GITHUB_OUTPUT
-          echo "qbt-libtorrent1-version=release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_1_2)" >> $GITHUB_OUTPUT
-          echo "qbt-legacy-version=release-$(echo "$legacy_json" | jq -r .qbittorrent)_v$(echo "$legacy_json" | jq -r .libtorrent_1_2)" >> $GITHUB_OUTPUT
-          echo "qbt-legacy-revision=$(echo "$legacy_json" | jq -r .revision)" >> $GITHUB_OUTPUT
-          echo "qbt-latest-revision=$(echo "$main_json" | jq -r .revision)" >> $GITHUB_OUTPUT
+          qbt_lt2_ver="release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_2_0)"
+          qbt_lt1_ver="release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_1_2)"
+          qbt_legacy_ver="release-$(echo "$legacy_json" | jq -r .qbittorrent)_v$(echo "$legacy_json" | jq -r .libtorrent_1_2)"
+          qbt_legacy_rev="$(echo "$legacy_json" | jq -r .revision)"
+          qbt_latest_rev="$(echo "$main_json" | jq -r .revision)"
+
+          # Set outputs
+          echo "qbt-libtorrent2-version=$qbt_lt2_ver" >> $GITHUB_OUTPUT
+          echo "qbt-libtorrent1-version=$qbt_lt1_ver" >> $GITHUB_OUTPUT
+          echo "qbt-legacy-version=$qbt_legacy_ver" >> $GITHUB_OUTPUT
+          echo "qbt-legacy-revision=$qbt_legacy_rev" >> $GITHUB_OUTPUT
+          echo "qbt-latest-revision=$qbt_latest_rev" >> $GITHUB_OUTPUT
+
+          # Create summary table
+          {
+            echo "# Version Check Summary"
+            echo
+            echo "| Build Type | Version | Revision |"
+            echo "|------------|---------|-----------|"
+            echo "| qBittorrent (libtorrent v2) | \`$qbt_lt2_ver\` | \`$qbt_latest_rev\` |"
+            echo "| qBittorrent (libtorrent v1) | \`$qbt_lt1_ver\` | \`$qbt_latest_rev\` |"
+            echo "| qBittorrent Legacy | \`$qbt_legacy_ver\` | \`$qbt_legacy_rev\` |"
+            echo
+            echo "Last checked: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } >> $GITHUB_STEP_SUMMARY
 
   update-libtorrent2:
     runs-on: ubuntu-latest
