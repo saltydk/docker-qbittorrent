@@ -9,110 +9,53 @@ jobs:
   find-latest-release:
     runs-on: ubuntu-latest
     outputs:
-      qbt-libtorrent2-version: ${{ steps.set-latest-libtorrent2-version.outputs.qbt-libtorrent2-version }}
-      qbt-libtorrent1-version: ${{ steps.set-latest-libtorrent1-version.outputs.qbt-libtorrent1-version }}
-      qbt-legacy-version: ${{ steps.set-latest-legacy-version.outputs.qbt-legacy-version }}
-      qbt-legacy-revision: ${{ steps.set-latest-legacy-revision.outputs.qbt-legacy-revision }}
-      qbt-latest-revision: ${{ steps.set-latest-revision.outputs.qbt-latest-revision }}
+      qbt-libtorrent2-version: ${{ steps.versions.outputs.qbt-libtorrent2-version }}
+      qbt-libtorrent1-version: ${{ steps.versions.outputs.qbt-libtorrent1-version }}
+      qbt-legacy-version: ${{ steps.versions.outputs.qbt-legacy-version }}
+      qbt-legacy-revision: ${{ steps.versions.outputs.qbt-legacy-revision }}
+      qbt-latest-revision: ${{ steps.versions.outputs.qbt-latest-revision }}
 
     steps:
-      - name: Check GitHub API rate limits
+      - name: Get and validate versions
+        id: versions
         run: |
-          response=$(curl -s -I https://api.github.com/rate_limit)
-          remaining=$(echo "$response" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
-          if [ -n "$remaining" ] && [ "$remaining" -lt 10 ]; then
-            echo "::warning::GitHub API rate limit is low: $remaining requests remaining"
-          fi
-
-      - name: Download and verify dependency versions
-        id: download-versions
-        run: |
-          main_deps_url="https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json"
-          legacy_deps_url="https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json"
-          
-          # Function to download and validate JSON
-          download_and_validate() {
-            local url=$1
-            local max_retries=3
-            local retry_count=0
+          # Function to safely get and validate JSON from URL
+          get_json() {
+            local url="$1"
+            local response
+            local retries=3
             
-            while [ $retry_count -lt $max_retries ]; do
+            for ((i=1; i<=retries; i++)); do
               response=$(curl -sL --retry 3 --retry-delay 5 "$url")
               if [ $? -eq 0 ] && echo "$response" | jq empty > /dev/null 2>&1; then
                 echo "$response"
                 return 0
               fi
-              retry_count=$((retry_count + 1))
               sleep 5
             done
             return 1
           }
-          
-          # Download and validate main dependency file
-          main_deps=$(download_and_validate "$main_deps_url")
+
+          # Get main versions
+          main_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json")
           if [ $? -ne 0 ]; then
-            echo "::error::Failed to download or parse main dependency version file"
+            echo "::error::Failed to fetch main versions"
             exit 1
           fi
-          echo "MAIN_DEPS=$main_deps" >> $GITHUB_ENV
-          
-          # Download and validate legacy dependency file
-          legacy_deps=$(download_and_validate "$legacy_deps_url")
+
+          # Get legacy versions
+          legacy_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json")
           if [ $? -ne 0 ]; then
-            echo "::error::Failed to download or parse legacy dependency version file"
+            echo "::error::Failed to fetch legacy versions"
             exit 1
           fi
-          echo "LEGACY_DEPS=$legacy_deps" >> $GITHUB_ENV
 
-      - name: Set libtorrent2 version
-        id: set-latest-libtorrent2-version
-        run: |
-          version=$(echo "$MAIN_DEPS" | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_2_0)"')
-          if [ -z "$version" ] || [ "$version" = "release-_v" ]; then
-            echo "::error::Failed to extract libtorrent2 version"
-            exit 1
-          fi
-          echo "qbt-libtorrent2-version=$version" >> $GITHUB_OUTPUT
-
-      - name: Set libtorrent1 version
-        id: set-latest-libtorrent1-version
-        run: |
-          version=$(echo "$MAIN_DEPS" | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')
-          if [ -z "$version" ] || [ "$version" = "release-_v" ]; then
-            echo "::error::Failed to extract libtorrent1 version"
-            exit 1
-          fi
-          echo "qbt-libtorrent1-version=$version" >> $GITHUB_OUTPUT
-
-      - name: Set legacy version
-        id: set-latest-legacy-version
-        run: |
-          version=$(echo "$LEGACY_DEPS" | jq -r '. | "release-\(.qbittorrent)_v\(.libtorrent_1_2)"')
-          if [ -z "$version" ] || [ "$version" = "release-_v" ]; then
-            echo "::error::Failed to extract legacy version"
-            exit 1
-          fi
-          echo "qbt-legacy-version=$version" >> $GITHUB_OUTPUT
-
-      - name: Set legacy revision
-        id: set-latest-legacy-revision
-        run: |
-          revision=$(echo "$LEGACY_DEPS" | jq -r '.revision')
-          if [ -z "$revision" ] || [ "$revision" = "null" ]; then
-            echo "::error::Failed to extract legacy revision"
-            exit 1
-          fi
-          echo "qbt-legacy-revision=$revision" >> $GITHUB_OUTPUT
-
-      - name: Set latest revision
-        id: set-latest-revision
-        run: |
-          revision=$(echo "$MAIN_DEPS" | jq -r '.revision')
-          if [ -z "$revision" ] || [ "$revision" = "null" ]; then
-            echo "::error::Failed to extract latest revision"
-            exit 1
-          fi
-          echo "qbt-latest-revision=$revision" >> $GITHUB_OUTPUT
+          # Extract and set outputs using GitHub Actions syntax
+          echo "qbt-libtorrent2-version=release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_2_0)" >> $GITHUB_OUTPUT
+          echo "qbt-libtorrent1-version=release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_1_2)" >> $GITHUB_OUTPUT
+          echo "qbt-legacy-version=release-$(echo "$legacy_json" | jq -r .qbittorrent)_v$(echo "$legacy_json" | jq -r .libtorrent_1_2)" >> $GITHUB_OUTPUT
+          echo "qbt-legacy-revision=$(echo "$legacy_json" | jq -r .revision)" >> $GITHUB_OUTPUT
+          echo "qbt-latest-revision=$(echo "$main_json" | jq -r .revision)" >> $GITHUB_OUTPUT
 
   update-libtorrent2:
     runs-on: ubuntu-latest
