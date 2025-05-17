@@ -6,4 +6,4 @@ umask "${UMASK_SET}"
 
 # Run
 exec s6-setuidgid abc \
-    /usr/bin/qbittorrent-nox
+    /usr/bin/qbittorrent-nox --confirm-legal-notice
