@@ -4,7 +4,7 @@ ARG OS_TAG=latest
 FROM saltydk/alpine-s6overlay:${OS_TAG}
 
 ARG QBITTORRENT_RELEASE="release-5.1.2_v2.0.11"
-ARG QBITTORRENT_REVISION="8"
+ARG QBITTORRENT_REVISION="9"
 
 LABEL maintainer="salty"
 
