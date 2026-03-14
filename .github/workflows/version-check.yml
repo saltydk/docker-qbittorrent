@@ -12,6 +12,12 @@ jobs:
       should-update-libtorrent2: ${{ steps.versions.outputs.should-update-libtorrent2 }}
       should-update-libtorrent1: ${{ steps.versions.outputs.should-update-libtorrent1 }}
       should-update-legacy: ${{ steps.versions.outputs.should-update-legacy }}
+      should_update_libtorrent2: ${{ steps.versions.outputs.should_update_libtorrent2 }}
+      should_update_libtorrent1: ${{ steps.versions.outputs.should_update_libtorrent1 }}
+      should_update_legacy: ${{ steps.versions.outputs.should_update_legacy }}
+      decision-libtorrent2: ${{ steps.versions.outputs.decision-libtorrent2 }}
+      decision-libtorrent1: ${{ steps.versions.outputs.decision-libtorrent1 }}
+      decision-legacy: ${{ steps.versions.outputs.decision-legacy }}
       qbt-libtorrent2-version: ${{ steps.versions.outputs.qbt-libtorrent2-version }}
       qbt-libtorrent1-version: ${{ steps.versions.outputs.qbt-libtorrent1-version }}
       qbt-libtorrent2-revision: ${{ steps.versions.outputs.qbt-libtorrent2-revision }}
@@ -20,9 +26,15 @@ jobs:
       qbt-legacy-revision: ${{ steps.versions.outputs.qbt-legacy-revision }}
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Get and validate versions
         id: versions
         run: |
+          set +e
+
           # Function to safely get and validate JSON from URL
           get_json() {
             local url="$1"
@@ -40,10 +52,71 @@ jobs:
             return 1
           }
 
+          # Extract ARG value from Dockerfile content (supports quoted and unquoted values)
+          get_docker_arg() {
+            local dockerfile_content="$1"
+            local arg_name="$2"
+            printf '%s\n' "$dockerfile_content" | awk -v arg="$arg_name" '
+              $1 == "ARG" && $2 ~ ("^" arg "=") {
+                value=$2
+                sub("^" arg "=", "", value)
+                gsub(/"/, "", value)
+                print value
+                exit
+              }'
+          }
+
+          # Compare desired release/revision against a branch Dockerfile.
+          # Output format: <should_update>|<reason>|<current_release>|<current_revision>
+          evaluate_branch_update() {
+            local branch="$1"
+            local target_release="$2"
+            local target_revision="$3"
+            local dockerfile_content
+            local current_release
+            local current_revision
+
+            if [[ -z "$target_release" || "$target_release" == "null" || -z "$target_revision" || "$target_revision" == "null" ]]; then
+              echo "false|missing target release/revision|n/a|n/a"
+              return 0
+            fi
+
+            dockerfile_content=$(git show "origin/${branch}:Dockerfile" 2>/dev/null)
+            if [ $? -ne 0 ] || [[ -z "$dockerfile_content" ]]; then
+              echo "false|failed to read origin/${branch}:Dockerfile|n/a|n/a"
+              return 0
+            fi
+
+            current_release="$(get_docker_arg "$dockerfile_content" "QBITTORRENT_RELEASE")"
+            current_revision="$(get_docker_arg "$dockerfile_content" "QBITTORRENT_REVISION")"
+
+            if [[ -z "$current_release" ]]; then
+              current_release="missing"
+            fi
+            if [[ -z "$current_revision" ]]; then
+              current_revision="missing"
+            fi
+
+            if [[ "$current_release" == "missing" || "$current_revision" == "missing" ]]; then
+              echo "false|missing QBITTORRENT_* ARG in origin/${branch}:Dockerfile|$current_release|$current_revision"
+              return 0
+            fi
+
+            if [[ "$current_release" == "$target_release" && "$current_revision" == "$target_revision" ]]; then
+              echo "false|up-to-date|$current_release|$current_revision"
+              return 0
+            fi
+
+            echo "true|update needed|$current_release|$current_revision"
+          }
+
           # Defaults so the step can succeed while selectively skipping downstream jobs.
           update_lt2=false
           update_lt1=false
           update_legacy=false
+          target_ready_lt2=false
+          target_ready_lt1=false
+          target_ready_legacy=false
           lt2_tag="unresolved"
           lt1_tag="unresolved"
           qbt_lt2_ver=""
@@ -52,6 +125,15 @@ jobs:
           qbt_lt2_rev=""
           qbt_lt1_rev=""
           qbt_legacy_rev=""
+          decision_lt2="not evaluated"
+          decision_lt1="not evaluated"
+          decision_legacy="not evaluated"
+          current_lt2_ver="n/a"
+          current_lt2_rev="n/a"
+          current_lt1_ver="n/a"
+          current_lt1_rev="n/a"
+          current_legacy_ver="n/a"
+          current_legacy_rev="n/a"
 
           # Get main versions (for lt2/lt1)
           main_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json")
@@ -70,30 +152,40 @@ jobs:
               if [ $? -eq 0 ]; then
                 qbt_lt2_rev="$(echo "$lt2_json" | jq -r .revision)"
                 if [[ -n "$qbt_lt2_rev" && "$qbt_lt2_rev" != "null" ]]; then
-                  update_lt2=true
+                  target_ready_lt2=true
+                  decision_lt2="target resolved"
                 else
                   echo "::warning::Missing revision in ${lt2_tag}/dependency-version.json"
+                  decision_lt2="missing revision in ${lt2_tag}/dependency-version.json"
                 fi
               else
                 echo "::warning::Failed to fetch ${lt2_tag}/dependency-version.json"
+                decision_lt2="failed to fetch ${lt2_tag}/dependency-version.json"
               fi
 
               lt1_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${lt1_tag}/dependency-version.json")
               if [ $? -eq 0 ]; then
                 qbt_lt1_rev="$(echo "$lt1_json" | jq -r .revision)"
                 if [[ -n "$qbt_lt1_rev" && "$qbt_lt1_rev" != "null" ]]; then
-                  update_lt1=true
+                  target_ready_lt1=true
+                  decision_lt1="target resolved"
                 else
                   echo "::warning::Missing revision in ${lt1_tag}/dependency-version.json"
+                  decision_lt1="missing revision in ${lt1_tag}/dependency-version.json"
                 fi
               else
                 echo "::warning::Failed to fetch ${lt1_tag}/dependency-version.json"
+                decision_lt1="failed to fetch ${lt1_tag}/dependency-version.json"
               fi
             else
               echo "::warning::Missing qbittorrent/libtorrent values in main dependency-version.json"
+              decision_lt2="missing qbittorrent/libtorrent_2_0 in main dependency-version.json"
+              decision_lt1="missing qbittorrent/libtorrent_1_2 in main dependency-version.json"
             fi
           else
             echo "::warning::Failed to fetch main versions"
+            decision_lt2="failed to fetch main dependency-version.json"
+            decision_lt1="failed to fetch main dependency-version.json"
           fi
 
           # Get legacy versions (independent from lt2/lt1)
@@ -105,27 +197,71 @@ jobs:
             if [[ -n "$legacy_qbt_ver" && "$legacy_qbt_ver" != "null" && -n "$legacy_lt1_ver" && "$legacy_lt1_ver" != "null" ]]; then
               qbt_legacy_ver="release-${legacy_qbt_ver}_v${legacy_lt1_ver}"
               if [[ -n "$qbt_legacy_rev" && "$qbt_legacy_rev" != "null" ]]; then
-                update_legacy=true
+                target_ready_legacy=true
+                decision_legacy="target resolved"
               else
                 echo "::warning::Missing revision in legacy dependency-version.json"
+                decision_legacy="missing revision in legacy dependency-version.json"
               fi
             else
               echo "::warning::Missing qbittorrent/libtorrent values in legacy dependency-version.json"
+              decision_legacy="missing qbittorrent/libtorrent_1_2 in legacy dependency-version.json"
             fi
           else
             echo "::warning::Failed to fetch legacy versions"
+            decision_legacy="failed to fetch legacy dependency-version.json"
+          fi
+
+          # Fetch target branches and compare current Dockerfile values against targets.
+          git fetch --no-tags --depth=1 origin libtorrent2 libtorrent1 legacy > /dev/null 2>&1
+          if [ $? -ne 0 ]; then
+            echo "::warning::Failed to fetch origin branches (libtorrent2/libtorrent1/legacy) for Dockerfile comparison"
+            if [ "$target_ready_lt2" = true ]; then
+              decision_lt2="failed to fetch branches for comparison"
+            fi
+            if [ "$target_ready_lt1" = true ]; then
+              decision_lt1="failed to fetch branches for comparison"
+            fi
+            if [ "$target_ready_legacy" = true ]; then
+              decision_legacy="failed to fetch branches for comparison"
+            fi
+          else
+            if [ "$target_ready_lt2" = true ]; then
+              lt2_eval="$(evaluate_branch_update "libtorrent2" "$qbt_lt2_ver" "$qbt_lt2_rev")"
+              IFS='|' read -r update_lt2 decision_lt2 current_lt2_ver current_lt2_rev <<< "$lt2_eval"
+            fi
+
+            if [ "$target_ready_lt1" = true ]; then
+              lt1_eval="$(evaluate_branch_update "libtorrent1" "$qbt_lt1_ver" "$qbt_lt1_rev")"
+              IFS='|' read -r update_lt1 decision_lt1 current_lt1_ver current_lt1_rev <<< "$lt1_eval"
+            fi
+
+            if [ "$target_ready_legacy" = true ]; then
+              legacy_eval="$(evaluate_branch_update "legacy" "$qbt_legacy_ver" "$qbt_legacy_rev")"
+              IFS='|' read -r update_legacy decision_legacy current_legacy_ver current_legacy_rev <<< "$legacy_eval"
+            fi
           fi
 
           # Set outputs
           echo "should-update-libtorrent2=$update_lt2" >> $GITHUB_OUTPUT
           echo "should-update-libtorrent1=$update_lt1" >> $GITHUB_OUTPUT
           echo "should-update-legacy=$update_legacy" >> $GITHUB_OUTPUT
+          echo "should_update_libtorrent2=$update_lt2" >> $GITHUB_OUTPUT
+          echo "should_update_libtorrent1=$update_lt1" >> $GITHUB_OUTPUT
+          echo "should_update_legacy=$update_legacy" >> $GITHUB_OUTPUT
+          echo "decision-libtorrent2=$decision_lt2" >> $GITHUB_OUTPUT
+          echo "decision-libtorrent1=$decision_lt1" >> $GITHUB_OUTPUT
+          echo "decision-legacy=$decision_legacy" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent2-version=$qbt_lt2_ver" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent1-version=$qbt_lt1_ver" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent2-revision=$qbt_lt2_rev" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent1-revision=$qbt_lt1_rev" >> $GITHUB_OUTPUT
           echo "qbt-legacy-version=$qbt_legacy_ver" >> $GITHUB_OUTPUT
           echo "qbt-legacy-revision=$qbt_legacy_rev" >> $GITHUB_OUTPUT
+
+          echo "::notice::libtorrent2 update=${update_lt2} tag=${lt2_tag} target=${qbt_lt2_ver:-n/a}-${qbt_lt2_rev:-n/a} current=${current_lt2_ver}-${current_lt2_rev} reason=${decision_lt2}"
+          echo "::notice::libtorrent1 update=${update_lt1} tag=${lt1_tag} target=${qbt_lt1_ver:-n/a}-${qbt_lt1_rev:-n/a} current=${current_lt1_ver}-${current_lt1_rev} reason=${decision_lt1}"
+          echo "::notice::legacy update=${update_legacy} target=${qbt_legacy_ver:-n/a}-${qbt_legacy_rev:-n/a} current=${current_legacy_ver}-${current_legacy_rev} reason=${decision_legacy}"
 
           # Create summary table
           {
@@ -140,11 +276,11 @@ jobs:
             echo "- libtorrent v1: \`$update_lt1\`"
             echo "- legacy: \`$update_legacy\`"
             echo
-            echo "| Build Type | Version | Revision |"
-            echo "|------------|---------|-----------|"
-            echo "| qBittorrent (libtorrent v2) | \`${qbt_lt2_ver:-n/a}\` | \`${qbt_lt2_rev:-n/a}\` |"
-            echo "| qBittorrent (libtorrent v1) | \`${qbt_lt1_ver:-n/a}\` | \`${qbt_lt1_rev:-n/a}\` |"
-            echo "| qBittorrent Legacy | \`${qbt_legacy_ver:-n/a}\` | \`${qbt_legacy_rev:-n/a}\` |"
+            echo "| Build Type | Target | Current | Should Update | Decision |"
+            echo "|------------|--------|---------|---------------|----------|"
+            echo "| qBittorrent (libtorrent v2) | \`${qbt_lt2_ver:-n/a}-${qbt_lt2_rev:-n/a}\` | \`${current_lt2_ver}-${current_lt2_rev}\` | \`${update_lt2}\` | \`${decision_lt2}\` |"
+            echo "| qBittorrent (libtorrent v1) | \`${qbt_lt1_ver:-n/a}-${qbt_lt1_rev:-n/a}\` | \`${current_lt1_ver}-${current_lt1_rev}\` | \`${update_lt1}\` | \`${decision_lt1}\` |"
+            echo "| qBittorrent Legacy | \`${qbt_legacy_ver:-n/a}-${qbt_legacy_rev:-n/a}\` | \`${current_legacy_ver}-${current_legacy_rev}\` | \`${update_legacy}\` | \`${decision_legacy}\` |"
             echo
             echo "Last checked: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           } >> $GITHUB_STEP_SUMMARY
@@ -152,7 +288,7 @@ jobs:
   update-libtorrent2:
     runs-on: ubuntu-latest
     needs: find-latest-release
-    if: ${{ needs.find-latest-release.outputs.should-update-libtorrent2 == 'true' }}
+    if: ${{ needs.find-latest-release.outputs.should_update_libtorrent2 == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -183,7 +319,7 @@ jobs:
   update-libtorrent1:
     runs-on: ubuntu-latest
     needs: find-latest-release
-    if: ${{ needs.find-latest-release.outputs.should-update-libtorrent1 == 'true' }}
+    if: ${{ needs.find-latest-release.outputs.should_update_libtorrent1 == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -214,7 +350,7 @@ jobs:
   update-legacy:
     runs-on: ubuntu-latest
     needs: find-latest-release
-    if: ${{ needs.find-latest-release.outputs.should-update-legacy == 'true' }}
+    if: ${{ needs.find-latest-release.outputs.should_update_legacy == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
