@@ -9,11 +9,15 @@ jobs:
   find-latest-release:
     runs-on: ubuntu-latest
     outputs:
+      should-update-libtorrent2: ${{ steps.versions.outputs.should-update-libtorrent2 }}
+      should-update-libtorrent1: ${{ steps.versions.outputs.should-update-libtorrent1 }}
+      should-update-legacy: ${{ steps.versions.outputs.should-update-legacy }}
       qbt-libtorrent2-version: ${{ steps.versions.outputs.qbt-libtorrent2-version }}
       qbt-libtorrent1-version: ${{ steps.versions.outputs.qbt-libtorrent1-version }}
+      qbt-libtorrent2-revision: ${{ steps.versions.outputs.qbt-libtorrent2-revision }}
+      qbt-libtorrent1-revision: ${{ steps.versions.outputs.qbt-libtorrent1-revision }}
       qbt-legacy-version: ${{ steps.versions.outputs.qbt-legacy-version }}
       qbt-legacy-revision: ${{ steps.versions.outputs.qbt-legacy-revision }}
-      qbt-latest-revision: ${{ steps.versions.outputs.qbt-latest-revision }}
 
     steps:
       - name: Get and validate versions
@@ -36,43 +40,111 @@ jobs:
             return 1
           }
 
-          # Get main versions
+          # Defaults so the step can succeed while selectively skipping downstream jobs.
+          update_lt2=false
+          update_lt1=false
+          update_legacy=false
+          lt2_tag="unresolved"
+          lt1_tag="unresolved"
+          qbt_lt2_ver=""
+          qbt_lt1_ver=""
+          qbt_legacy_ver=""
+          qbt_lt2_rev=""
+          qbt_lt1_rev=""
+          qbt_legacy_rev=""
+
+          # Get main versions (for lt2/lt1)
           main_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json")
-          if [ $? -ne 0 ]; then
-            echo "::error::Failed to fetch main versions"
-            exit 1
+          if [ $? -eq 0 ]; then
+            qbt_ver="$(echo "$main_json" | jq -r .qbittorrent)"
+            lt2_ver="$(echo "$main_json" | jq -r .libtorrent_2_0)"
+            lt1_ver="$(echo "$main_json" | jq -r .libtorrent_1_2)"
+
+            if [[ -n "$qbt_ver" && "$qbt_ver" != "null" && -n "$lt2_ver" && "$lt2_ver" != "null" && -n "$lt1_ver" && "$lt1_ver" != "null" ]]; then
+              qbt_lt2_ver="release-${qbt_ver}_v${lt2_ver}"
+              qbt_lt1_ver="release-${qbt_ver}_v${lt1_ver}"
+              lt2_tag="$qbt_lt2_ver"
+              lt1_tag="$qbt_lt1_ver"
+
+              lt2_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${lt2_tag}/dependency-version.json")
+              if [ $? -eq 0 ]; then
+                qbt_lt2_rev="$(echo "$lt2_json" | jq -r .revision)"
+                if [[ -n "$qbt_lt2_rev" && "$qbt_lt2_rev" != "null" ]]; then
+                  update_lt2=true
+                else
+                  echo "::warning::Missing revision in ${lt2_tag}/dependency-version.json"
+                fi
+              else
+                echo "::warning::Failed to fetch ${lt2_tag}/dependency-version.json"
+              fi
+
+              lt1_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${lt1_tag}/dependency-version.json")
+              if [ $? -eq 0 ]; then
+                qbt_lt1_rev="$(echo "$lt1_json" | jq -r .revision)"
+                if [[ -n "$qbt_lt1_rev" && "$qbt_lt1_rev" != "null" ]]; then
+                  update_lt1=true
+                else
+                  echo "::warning::Missing revision in ${lt1_tag}/dependency-version.json"
+                fi
+              else
+                echo "::warning::Failed to fetch ${lt1_tag}/dependency-version.json"
+              fi
+            else
+              echo "::warning::Missing qbittorrent/libtorrent values in main dependency-version.json"
+            fi
+          else
+            echo "::warning::Failed to fetch main versions"
           fi
 
-          # Get legacy versions
+          # Get legacy versions (independent from lt2/lt1)
           legacy_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json")
-          if [ $? -ne 0 ]; then
-            echo "::error::Failed to fetch legacy versions"
-            exit 1
+          if [ $? -eq 0 ]; then
+            legacy_qbt_ver="$(echo "$legacy_json" | jq -r .qbittorrent)"
+            legacy_lt1_ver="$(echo "$legacy_json" | jq -r .libtorrent_1_2)"
+            qbt_legacy_rev="$(echo "$legacy_json" | jq -r .revision)"
+            if [[ -n "$legacy_qbt_ver" && "$legacy_qbt_ver" != "null" && -n "$legacy_lt1_ver" && "$legacy_lt1_ver" != "null" ]]; then
+              qbt_legacy_ver="release-${legacy_qbt_ver}_v${legacy_lt1_ver}"
+              if [[ -n "$qbt_legacy_rev" && "$qbt_legacy_rev" != "null" ]]; then
+                update_legacy=true
+              else
+                echo "::warning::Missing revision in legacy dependency-version.json"
+              fi
+            else
+              echo "::warning::Missing qbittorrent/libtorrent values in legacy dependency-version.json"
+            fi
+          else
+            echo "::warning::Failed to fetch legacy versions"
           fi
-
-          # Extract and set outputs using GitHub Actions syntax
-          qbt_lt2_ver="release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_2_0)"
-          qbt_lt1_ver="release-$(echo "$main_json" | jq -r .qbittorrent)_v$(echo "$main_json" | jq -r .libtorrent_1_2)"
-          qbt_legacy_ver="release-$(echo "$legacy_json" | jq -r .qbittorrent)_v$(echo "$legacy_json" | jq -r .libtorrent_1_2)"
-          qbt_legacy_rev="$(echo "$legacy_json" | jq -r .revision)"
-          qbt_latest_rev="$(echo "$main_json" | jq -r .revision)"
 
           # Set outputs
+          echo "should-update-libtorrent2=$update_lt2" >> $GITHUB_OUTPUT
+          echo "should-update-libtorrent1=$update_lt1" >> $GITHUB_OUTPUT
+          echo "should-update-legacy=$update_legacy" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent2-version=$qbt_lt2_ver" >> $GITHUB_OUTPUT
           echo "qbt-libtorrent1-version=$qbt_lt1_ver" >> $GITHUB_OUTPUT
+          echo "qbt-libtorrent2-revision=$qbt_lt2_rev" >> $GITHUB_OUTPUT
+          echo "qbt-libtorrent1-revision=$qbt_lt1_rev" >> $GITHUB_OUTPUT
           echo "qbt-legacy-version=$qbt_legacy_ver" >> $GITHUB_OUTPUT
           echo "qbt-legacy-revision=$qbt_legacy_rev" >> $GITHUB_OUTPUT
-          echo "qbt-latest-revision=$qbt_latest_rev" >> $GITHUB_OUTPUT
 
           # Create summary table
           {
             echo "# Version Check Summary"
             echo
+            echo "Resolved tags:"
+            echo "- libtorrent v2: \`$lt2_tag\`"
+            echo "- libtorrent v1: \`$lt1_tag\`"
+            echo
+            echo "Update eligibility:"
+            echo "- libtorrent v2: \`$update_lt2\`"
+            echo "- libtorrent v1: \`$update_lt1\`"
+            echo "- legacy: \`$update_legacy\`"
+            echo
             echo "| Build Type | Version | Revision |"
             echo "|------------|---------|-----------|"
-            echo "| qBittorrent (libtorrent v2) | \`$qbt_lt2_ver\` | \`$qbt_latest_rev\` |"
-            echo "| qBittorrent (libtorrent v1) | \`$qbt_lt1_ver\` | \`$qbt_latest_rev\` |"
-            echo "| qBittorrent Legacy | \`$qbt_legacy_ver\` | \`$qbt_legacy_rev\` |"
+            echo "| qBittorrent (libtorrent v2) | \`${qbt_lt2_ver:-n/a}\` | \`${qbt_lt2_rev:-n/a}\` |"
+            echo "| qBittorrent (libtorrent v1) | \`${qbt_lt1_ver:-n/a}\` | \`${qbt_lt1_rev:-n/a}\` |"
+            echo "| qBittorrent Legacy | \`${qbt_legacy_ver:-n/a}\` | \`${qbt_legacy_rev:-n/a}\` |"
             echo
             echo "Last checked: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           } >> $GITHUB_STEP_SUMMARY
@@ -80,6 +152,7 @@ jobs:
   update-libtorrent2:
     runs-on: ubuntu-latest
     needs: find-latest-release
+    if: ${{ needs.find-latest-release.outputs.should-update-libtorrent2 == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -95,12 +168,12 @@ jobs:
       run: |
         [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
       env:
-        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-latest-revision }}
+        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-revision }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}-${{ needs.find-latest-release.outputs.qbt-latest-revision }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}-${{ needs.find-latest-release.outputs.qbt-libtorrent2-revision }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
@@ -110,6 +183,7 @@ jobs:
   update-libtorrent1:
     runs-on: ubuntu-latest
     needs: find-latest-release
+    if: ${{ needs.find-latest-release.outputs.should-update-libtorrent1 == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -125,12 +199,12 @@ jobs:
       run: |
         [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
       env:
-        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-latest-revision }}
+        QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-libtorrent1-revision }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}-${{ needs.find-latest-release.outputs.qbt-latest-revision }}" -a || echo "Nothing to update"
+        git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}-${{ needs.find-latest-release.outputs.qbt-libtorrent1-revision }}" -a || echo "Nothing to update"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
@@ -140,6 +214,7 @@ jobs:
   update-legacy:
     runs-on: ubuntu-latest
     needs: find-latest-release
+    if: ${{ needs.find-latest-release.outputs.should-update-legacy == 'true' }}
     steps:
     - uses: actions/checkout@v4
       with:
