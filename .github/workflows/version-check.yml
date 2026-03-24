@@ -285,6 +285,66 @@ jobs:
             echo "Last checked: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           } >> $GITHUB_STEP_SUMMARY
 
+          # Print dependency changes for branches being updated
+          print_dependency_changes() {
+            local label="$1"
+            local new_json="$2"
+            local current_ver="$3"
+            local target_ver="$4"
+            local upstream_base_url="$5"
+
+            echo
+            echo "## ${label} dependency changes"
+            echo
+
+            if [[ -z "$new_json" ]]; then
+              echo "_No dependency data available._"
+              return
+            fi
+
+            local old_json=""
+            if [[ "$current_ver" != "$target_ver" && "$current_ver" != "n/a" && "$current_ver" != "missing" ]]; then
+              old_json=$(get_json "${upstream_base_url}/${current_ver}/dependency-version.json") || old_json=""
+            fi
+
+            if [[ -n "$old_json" ]]; then
+              echo "| Dependency | Old | New |"
+              echo "|------------|-----|-----|"
+              for key in $(echo "$new_json" | jq -r 'keys[]'); do
+                old_val=$(echo "$old_json" | jq -r --arg k "$key" '.[$k] // "n/a"')
+                new_val=$(echo "$new_json" | jq -r --arg k "$key" '.[$k] // "n/a"')
+                if [[ "$old_val" != "$new_val" ]]; then
+                  echo "| ${key} | \`${old_val}\` | \`${new_val}\` |"
+                fi
+              done
+            else
+              echo "| Dependency | Version |"
+              echo "|------------|---------|"
+              echo "$new_json" | jq -r 'to_entries[] | "| \(.key) | `\(.value)` |"'
+              if [[ "$current_ver" == "$target_ver" ]]; then
+                echo
+                echo "_Revision-only update. Previous dependency versions not available from upstream._"
+              fi
+            fi
+          }
+
+          {
+            if [[ "$update_lt2" == "true" ]]; then
+              print_dependency_changes "libtorrent v2" "$lt2_json" "$current_lt2_ver" "$qbt_lt2_ver" \
+                "https://github.com/userdocs/qbittorrent-nox-static/releases/download"
+            fi
+
+            if [[ "$update_lt1" == "true" ]]; then
+              print_dependency_changes "libtorrent v1" "$lt1_json" "$current_lt1_ver" "$qbt_lt1_ver" \
+                "https://github.com/userdocs/qbittorrent-nox-static/releases/download"
+            fi
+
+            if [[ "$update_legacy" == "true" ]]; then
+              print_dependency_changes "Legacy" "$legacy_json" "$current_legacy_ver" "$qbt_legacy_ver" \
+                "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/download"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
   update-libtorrent2:
     runs-on: ubuntu-latest
     needs: find-latest-release
