@@ -14,10 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
+      qbt-release: ${{ steps.set-latest-version.outputs.qbt-release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: set-latest-version
-        run: echo "qbt-version=$(head -6 Dockerfile | tail -1 | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+        run: |
+          release=$(awk -F'"' '/^ARG QBITTORRENT_RELEASE=/{print $2}' Dockerfile)
+          revision=$(awk -F'"' '/^ARG QBITTORRENT_REVISION=/{print $2}' Dockerfile)
+          echo "qbt-version=${release}-${revision}" >> $GITHUB_OUTPUT
+          echo "qbt-release=${release}" >> $GITHUB_OUTPUT
 
   docker:
     runs-on: ubuntu-latest
@@ -50,6 +55,7 @@ jobs:
           push: true
           tags: |
             saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
+            saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-release }}
             saltydk/qbittorrent:legacy
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

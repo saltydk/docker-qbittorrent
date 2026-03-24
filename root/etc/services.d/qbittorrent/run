@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bash
 
 # Umask
 UMASK_SET=${UMASK_SET:-022}
