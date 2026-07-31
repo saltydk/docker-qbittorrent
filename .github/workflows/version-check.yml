@@ -5,6 +5,9 @@ on:
   schedule:
     - cron:  '0 */6 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   find-latest-release:
     runs-on: ubuntu-latest
@@ -22,16 +25,21 @@ jobs:
       qbt-libtorrent1-version: ${{ steps.versions.outputs.qbt-libtorrent1-version }}
       qbt-libtorrent2-revision: ${{ steps.versions.outputs.qbt-libtorrent2-revision }}
       qbt-libtorrent1-revision: ${{ steps.versions.outputs.qbt-libtorrent1-revision }}
+      qbt-libtorrent2-sha256: ${{ steps.versions.outputs.qbt-libtorrent2-sha256 }}
+      qbt-libtorrent1-sha256: ${{ steps.versions.outputs.qbt-libtorrent1-sha256 }}
       qbt-legacy-version: ${{ steps.versions.outputs.qbt-legacy-version }}
       qbt-legacy-revision: ${{ steps.versions.outputs.qbt-legacy-revision }}
+      qbt-legacy-sha256: ${{ steps.versions.outputs.qbt-legacy-sha256 }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Get and validate versions
         id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
 
@@ -66,18 +74,44 @@ jobs:
               }'
           }
 
-          # Compare desired release/revision against a branch Dockerfile.
+          # Get the digest GitHub calculated for the published amd64 binary.
+          get_release_sha256() {
+            local repository="$1"
+            local tag="$2"
+            local release_json
+            local digest
+
+            release_json=$(gh api "repos/${repository}/releases/tags/${tag}") || return 1
+            digest=$(printf '%s\n' "$release_json" | jq -r '
+              [.assets[] | select(.name == "x86_64-qbittorrent-nox")][0].digest // empty
+            ')
+            digest="${digest#sha256:}"
+
+            if [[ ! "$digest" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              return 1
+            fi
+
+            printf '%s\n' "$digest"
+          }
+
+          # Compare the desired release and binary digest against a branch Dockerfile.
+          # The image revision may be newer than the upstream artifact revision after
+          # an image-only rebuild, so matching content must never be downgraded.
           # Output format: <should_update>|<reason>|<current_release>|<current_revision>
           evaluate_branch_update() {
             local branch="$1"
             local target_release="$2"
             local target_revision="$3"
+            local target_sha256="$4"
             local dockerfile_content
             local current_release
             local current_revision
+            local current_sha256
 
-            if [[ -z "$target_release" || "$target_release" == "null" || -z "$target_revision" || "$target_revision" == "null" ]]; then
-              echo "false|missing target release/revision|n/a|n/a"
+            if [[ -z "$target_release" || "$target_release" == "null" ||
+                  -z "$target_revision" || "$target_revision" == "null" ||
+                  -z "$target_sha256" || "$target_sha256" == "null" ]]; then
+              echo "false|missing target release/revision/checksum|n/a|n/a"
               return 0
             fi
 
@@ -89,6 +123,7 @@ jobs:
 
             current_release="$(get_docker_arg "$dockerfile_content" "QBITTORRENT_RELEASE")"
             current_revision="$(get_docker_arg "$dockerfile_content" "QBITTORRENT_REVISION")"
+            current_sha256="$(get_docker_arg "$dockerfile_content" "QBITTORRENT_SHA256")"
 
             if [[ -z "$current_release" ]]; then
               current_release="missing"
@@ -96,13 +131,16 @@ jobs:
             if [[ -z "$current_revision" ]]; then
               current_revision="missing"
             fi
+            if [[ -z "$current_sha256" ]]; then
+              current_sha256="missing"
+            fi
 
-            if [[ "$current_release" == "missing" || "$current_revision" == "missing" ]]; then
+            if [[ "$current_release" == "missing" || "$current_revision" == "missing" || "$current_sha256" == "missing" ]]; then
               echo "false|missing QBITTORRENT_* ARG in origin/${branch}:Dockerfile|$current_release|$current_revision"
               return 0
             fi
 
-            if [[ "$current_release" == "$target_release" && "$current_revision" == "$target_revision" ]]; then
+            if [[ "$current_release" == "$target_release" && "$current_sha256" == "$target_sha256" ]]; then
               echo "false|up-to-date|$current_release|$current_revision"
               return 0
             fi
@@ -125,6 +163,9 @@ jobs:
           qbt_lt2_rev=""
           qbt_lt1_rev=""
           qbt_legacy_rev=""
+          qbt_lt2_sha256=""
+          qbt_lt1_sha256=""
+          qbt_legacy_sha256=""
           decision_lt2="not evaluated"
           decision_lt1="not evaluated"
           decision_legacy="not evaluated"
@@ -151,12 +192,13 @@ jobs:
               lt2_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${lt2_tag}/dependency-version.json")
               if [ $? -eq 0 ]; then
                 qbt_lt2_rev="$(echo "$lt2_json" | jq -r .revision)"
-                if [[ -n "$qbt_lt2_rev" && "$qbt_lt2_rev" != "null" ]]; then
+                qbt_lt2_sha256="$(get_release_sha256 "userdocs/qbittorrent-nox-static" "$lt2_tag")"
+                if [[ -n "$qbt_lt2_rev" && "$qbt_lt2_rev" != "null" && -n "$qbt_lt2_sha256" ]]; then
                   target_ready_lt2=true
                   decision_lt2="target resolved"
                 else
-                  echo "::warning::Missing revision in ${lt2_tag}/dependency-version.json"
-                  decision_lt2="missing revision in ${lt2_tag}/dependency-version.json"
+                  echo "::warning::Missing revision or binary checksum for ${lt2_tag}"
+                  decision_lt2="missing revision or binary checksum for ${lt2_tag}"
                 fi
               else
                 echo "::warning::Failed to fetch ${lt2_tag}/dependency-version.json"
@@ -166,12 +208,13 @@ jobs:
               lt1_json=$(get_json "https://github.com/userdocs/qbittorrent-nox-static/releases/download/${lt1_tag}/dependency-version.json")
               if [ $? -eq 0 ]; then
                 qbt_lt1_rev="$(echo "$lt1_json" | jq -r .revision)"
-                if [[ -n "$qbt_lt1_rev" && "$qbt_lt1_rev" != "null" ]]; then
+                qbt_lt1_sha256="$(get_release_sha256 "userdocs/qbittorrent-nox-static" "$lt1_tag")"
+                if [[ -n "$qbt_lt1_rev" && "$qbt_lt1_rev" != "null" && -n "$qbt_lt1_sha256" ]]; then
                   target_ready_lt1=true
                   decision_lt1="target resolved"
                 else
-                  echo "::warning::Missing revision in ${lt1_tag}/dependency-version.json"
-                  decision_lt1="missing revision in ${lt1_tag}/dependency-version.json"
+                  echo "::warning::Missing revision or binary checksum for ${lt1_tag}"
+                  decision_lt1="missing revision or binary checksum for ${lt1_tag}"
                 fi
               else
                 echo "::warning::Failed to fetch ${lt1_tag}/dependency-version.json"
@@ -196,12 +239,13 @@ jobs:
             qbt_legacy_rev="$(echo "$legacy_json" | jq -r .revision)"
             if [[ -n "$legacy_qbt_ver" && "$legacy_qbt_ver" != "null" && -n "$legacy_lt1_ver" && "$legacy_lt1_ver" != "null" ]]; then
               qbt_legacy_ver="release-${legacy_qbt_ver}_v${legacy_lt1_ver}"
-              if [[ -n "$qbt_legacy_rev" && "$qbt_legacy_rev" != "null" ]]; then
+              qbt_legacy_sha256="$(get_release_sha256 "userdocs/qbittorrent-nox-static-legacy" "$qbt_legacy_ver")"
+              if [[ -n "$qbt_legacy_rev" && "$qbt_legacy_rev" != "null" && -n "$qbt_legacy_sha256" ]]; then
                 target_ready_legacy=true
                 decision_legacy="target resolved"
               else
-                echo "::warning::Missing revision in legacy dependency-version.json"
-                decision_legacy="missing revision in legacy dependency-version.json"
+                echo "::warning::Missing revision or binary checksum for ${qbt_legacy_ver}"
+                decision_legacy="missing revision or binary checksum for ${qbt_legacy_ver}"
               fi
             else
               echo "::warning::Missing qbittorrent/libtorrent values in legacy dependency-version.json"
@@ -227,37 +271,40 @@ jobs:
             fi
           else
             if [ "$target_ready_lt2" = true ]; then
-              lt2_eval="$(evaluate_branch_update "libtorrent2" "$qbt_lt2_ver" "$qbt_lt2_rev")"
+              lt2_eval="$(evaluate_branch_update "libtorrent2" "$qbt_lt2_ver" "$qbt_lt2_rev" "$qbt_lt2_sha256")"
               IFS='|' read -r update_lt2 decision_lt2 current_lt2_ver current_lt2_rev <<< "$lt2_eval"
             fi
 
             if [ "$target_ready_lt1" = true ]; then
-              lt1_eval="$(evaluate_branch_update "libtorrent1" "$qbt_lt1_ver" "$qbt_lt1_rev")"
+              lt1_eval="$(evaluate_branch_update "libtorrent1" "$qbt_lt1_ver" "$qbt_lt1_rev" "$qbt_lt1_sha256")"
               IFS='|' read -r update_lt1 decision_lt1 current_lt1_ver current_lt1_rev <<< "$lt1_eval"
             fi
 
             if [ "$target_ready_legacy" = true ]; then
-              legacy_eval="$(evaluate_branch_update "legacy" "$qbt_legacy_ver" "$qbt_legacy_rev")"
+              legacy_eval="$(evaluate_branch_update "legacy" "$qbt_legacy_ver" "$qbt_legacy_rev" "$qbt_legacy_sha256")"
               IFS='|' read -r update_legacy decision_legacy current_legacy_ver current_legacy_rev <<< "$legacy_eval"
             fi
           fi
 
           # Set outputs
-          echo "should-update-libtorrent2=$update_lt2" >> $GITHUB_OUTPUT
-          echo "should-update-libtorrent1=$update_lt1" >> $GITHUB_OUTPUT
-          echo "should-update-legacy=$update_legacy" >> $GITHUB_OUTPUT
-          echo "should_update_libtorrent2=$update_lt2" >> $GITHUB_OUTPUT
-          echo "should_update_libtorrent1=$update_lt1" >> $GITHUB_OUTPUT
-          echo "should_update_legacy=$update_legacy" >> $GITHUB_OUTPUT
-          echo "decision-libtorrent2=$decision_lt2" >> $GITHUB_OUTPUT
-          echo "decision-libtorrent1=$decision_lt1" >> $GITHUB_OUTPUT
-          echo "decision-legacy=$decision_legacy" >> $GITHUB_OUTPUT
-          echo "qbt-libtorrent2-version=$qbt_lt2_ver" >> $GITHUB_OUTPUT
-          echo "qbt-libtorrent1-version=$qbt_lt1_ver" >> $GITHUB_OUTPUT
-          echo "qbt-libtorrent2-revision=$qbt_lt2_rev" >> $GITHUB_OUTPUT
-          echo "qbt-libtorrent1-revision=$qbt_lt1_rev" >> $GITHUB_OUTPUT
-          echo "qbt-legacy-version=$qbt_legacy_ver" >> $GITHUB_OUTPUT
-          echo "qbt-legacy-revision=$qbt_legacy_rev" >> $GITHUB_OUTPUT
+          echo "should-update-libtorrent2=$update_lt2" >> "$GITHUB_OUTPUT"
+          echo "should-update-libtorrent1=$update_lt1" >> "$GITHUB_OUTPUT"
+          echo "should-update-legacy=$update_legacy" >> "$GITHUB_OUTPUT"
+          echo "should_update_libtorrent2=$update_lt2" >> "$GITHUB_OUTPUT"
+          echo "should_update_libtorrent1=$update_lt1" >> "$GITHUB_OUTPUT"
+          echo "should_update_legacy=$update_legacy" >> "$GITHUB_OUTPUT"
+          echo "decision-libtorrent2=$decision_lt2" >> "$GITHUB_OUTPUT"
+          echo "decision-libtorrent1=$decision_lt1" >> "$GITHUB_OUTPUT"
+          echo "decision-legacy=$decision_legacy" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent2-version=$qbt_lt2_ver" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent1-version=$qbt_lt1_ver" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent2-revision=$qbt_lt2_rev" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent1-revision=$qbt_lt1_rev" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent2-sha256=$qbt_lt2_sha256" >> "$GITHUB_OUTPUT"
+          echo "qbt-libtorrent1-sha256=$qbt_lt1_sha256" >> "$GITHUB_OUTPUT"
+          echo "qbt-legacy-version=$qbt_legacy_ver" >> "$GITHUB_OUTPUT"
+          echo "qbt-legacy-revision=$qbt_legacy_rev" >> "$GITHUB_OUTPUT"
+          echo "qbt-legacy-sha256=$qbt_legacy_sha256" >> "$GITHUB_OUTPUT"
 
           echo "::notice::libtorrent2 update=${update_lt2} tag=${lt2_tag} target=${qbt_lt2_ver:-n/a}-${qbt_lt2_rev:-n/a} current=${current_lt2_ver}-${current_lt2_rev} reason=${decision_lt2}"
           echo "::notice::libtorrent1 update=${update_lt1} tag=${lt1_tag} target=${qbt_lt1_ver:-n/a}-${qbt_lt1_rev:-n/a} current=${current_lt1_ver}-${current_lt1_rev} reason=${decision_lt1}"
@@ -350,28 +397,33 @@ jobs:
     needs: find-latest-release
     if: ${{ needs.find-latest-release.outputs.should_update_libtorrent2 == 'true' }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
         ref: libtorrent2
-    - name: Create local changes
+    - name: Update qBittorrent release
       run: |
-        [ ! -z "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
+        [ -n "$QBT_VERSION" ] && [[ "$QBT_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_VERSION}'"/' Dockerfile
       env:
         QBT_VERSION: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}
-    - name: Create local changes
+    - name: Update image revision
       run: |
-        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+        [ -n "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
       env:
         QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-revision }}
+    - name: Update binary checksum
+      run: |
+        [ -n "$QBT_SHA256" ] && [[ "$QBT_SHA256" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_SHA256=.*/ARG QBITTORRENT_SHA256="'${QBT_SHA256}'"/' Dockerfile
+      env:
+        QBT_SHA256: ${{ needs.find-latest-release.outputs.qbt-libtorrent2-sha256 }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent2-version }}-${{ needs.find-latest-release.outputs.qbt-libtorrent2-revision }}" -a || echo "Nothing to update"
     - name: Push changes
-      uses: ad-m/github-push-action@master
+      uses: ad-m/github-push-action@v1
       with:
         github_token: ${{ secrets.GH_TOKEN }}
         branch: libtorrent2
@@ -381,28 +433,33 @@ jobs:
     needs: find-latest-release
     if: ${{ needs.find-latest-release.outputs.should_update_libtorrent1 == 'true' }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
         ref: libtorrent1
-    - name: Create local changes
+    - name: Update qBittorrent release
       run: |
-        [ ! -z "$QBT_LIBTORRENT1_VERSION" ] && [[ "$QBT_LIBTORRENT1_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT1_VERSION}'"/' Dockerfile
+        [ -n "$QBT_LIBTORRENT1_VERSION" ] && [[ "$QBT_LIBTORRENT1_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LIBTORRENT1_VERSION}'"/' Dockerfile
       env:
         QBT_LIBTORRENT1_VERSION: ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}
-    - name: Create local changes
+    - name: Update image revision
       run: |
-        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+        [ -n "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
       env:
         QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-libtorrent1-revision }}
+    - name: Update binary checksum
+      run: |
+        [ -n "$QBT_SHA256" ] && [[ "$QBT_SHA256" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_SHA256=.*/ARG QBITTORRENT_SHA256="'${QBT_SHA256}'"/' Dockerfile
+      env:
+        QBT_SHA256: ${{ needs.find-latest-release.outputs.qbt-libtorrent1-sha256 }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-libtorrent1-version }}-${{ needs.find-latest-release.outputs.qbt-libtorrent1-revision }}" -a || echo "Nothing to update"
     - name: Push changes
-      uses: ad-m/github-push-action@master
+      uses: ad-m/github-push-action@v1
       with:
         github_token: ${{ secrets.GH_TOKEN }}
         branch: libtorrent1
@@ -412,28 +469,33 @@ jobs:
     needs: find-latest-release
     if: ${{ needs.find-latest-release.outputs.should_update_legacy == 'true' }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         persist-credentials: false # otherwise, the token used is the GITHUB_TOKEN, instead of your personal access token.
         fetch-depth: 0 # otherwise, there would be errors pushing refs to the destination repository.
         ref: legacy
-    - name: Create local changes
+    - name: Update qBittorrent release
       run: |
-        [ ! -z "$QBT_LEGACY_VERSION" ] && [[ "$QBT_LEGACY_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LEGACY_VERSION}'"/' Dockerfile
+        [ -n "$QBT_LEGACY_VERSION" ] && [[ "$QBT_LEGACY_VERSION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_RELEASE=.*/ARG QBITTORRENT_RELEASE="'${QBT_LEGACY_VERSION}'"/' Dockerfile
       env:
         QBT_LEGACY_VERSION: ${{ needs.find-latest-release.outputs.qbt-legacy-version }}
-    - name: Create local changes
+    - name: Update image revision
       run: |
-        [ ! -z "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
+        [ -n "$QBT_REVISION" ] && [[ "$QBT_REVISION" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_REVISION=.*/ARG QBITTORRENT_REVISION="'${QBT_REVISION}'"/' Dockerfile
       env:
         QBT_REVISION: ${{ needs.find-latest-release.outputs.qbt-legacy-revision }}
+    - name: Update binary checksum
+      run: |
+        [ -n "$QBT_SHA256" ] && [[ "$QBT_SHA256" != "null" ]] && sed -i 's/.*ARG QBITTORRENT_SHA256=.*/ARG QBITTORRENT_SHA256="'${QBT_SHA256}'"/' Dockerfile
+      env:
+        QBT_SHA256: ${{ needs.find-latest-release.outputs.qbt-legacy-sha256 }}
     - name: Commit files
       run: |
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git commit -m "Update to ${{ needs.find-latest-release.outputs.qbt-legacy-version }}-${{ needs.find-latest-release.outputs.qbt-legacy-revision }}" -a || echo "Nothing to update"
     - name: Push changes
-      uses: ad-m/github-push-action@master
+      uses: ad-m/github-push-action@v1
       with:
         github_token: ${{ secrets.GH_TOKEN }}
         branch: legacy
