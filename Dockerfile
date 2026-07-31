@@ -4,7 +4,8 @@ ARG OS_TAG=latest
 FROM saltydk/alpine-s6overlay:${OS_TAG}
 
 ARG QBITTORRENT_RELEASE="release-4.3.9_v1.2.20"
-ARG QBITTORRENT_REVISION="7"
+ARG QBITTORRENT_REVISION="8"
+ARG QBITTORRENT_SHA256="edc96877d3727fa8da59e1331557c3528e78904ecc153fe02f05dcdc70c1e854"
 
 LABEL maintainer="salty"
 
@@ -35,6 +36,7 @@ RUN \
   echo "**** install qbittorrent-nox ****" && \
   curl -sSf -L -o /usr/bin/qbittorrent-nox \
     "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/download/${QBITTORRENT_RELEASE}/x86_64-qbittorrent-nox" && \
+  echo "${QBITTORRENT_SHA256}  /usr/bin/qbittorrent-nox" | sha256sum -c - && \
   chmod 755 /usr/bin/qbittorrent-nox && \
   echo "**** cleanup ****" && \
   rm -rf \
