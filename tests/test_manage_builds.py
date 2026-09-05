@@ -25,8 +25,35 @@ from scripts.manage_builds import (
 )
 
 
-BASE_OLD = "saltydk/alpine-s6overlay:latest@sha256:" + "1" * 64
-BASE_NEW = "saltydk/alpine-s6overlay:latest@sha256:" + "2" * 64
+BASE_REPOSITORY = "saltydk/alpine-s6overlay"
+BASE_OLD = f"{BASE_REPOSITORY}:sha-{'1' * 40}@sha256:{'1' * 64}"
+BASE_NEW = f"{BASE_REPOSITORY}:sha-{'2' * 40}@sha256:{'2' * 64}"
+
+
+def base_metadata(
+    revisions: dict[str, str] | None = None,
+    digest: str = "2" * 64,
+) -> str:
+    platform_revisions = revisions or {
+        "linux/amd64": "2" * 40,
+        "linux/arm64": "2" * 40,
+        "linux/arm/v7": "2" * 40,
+    }
+    return json.dumps(
+        {
+            "manifest": {"digest": "sha256:" + digest},
+            "image": {
+                platform: {
+                    "config": {
+                        "Labels": {
+                            "org.opencontainers.image.revision": revision,
+                        }
+                    }
+                }
+                for platform, revision in platform_revisions.items()
+            },
+        }
+    )
 
 
 def state(
@@ -298,6 +325,13 @@ class SourceTests(unittest.TestCase):
 
         def runner(command):
             if command[:3] == ["docker", "buildx", "imagetools"]:
+                if command[4] == "saltydk/alpine-s6overlay:latest":
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        base_metadata(),
+                        "",
+                    )
                 return subprocess.CompletedProcess(
                     command,
                     0,
@@ -311,6 +345,84 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(provider.base_image(), BASE_NEW)
         self.assertTrue(provider.is_published(state()))
         self.assertTrue(provider.packages_outdated(state()))
+
+    def test_base_resolution_rejects_missing_platform_metadata(self) -> None:
+        def runner(command):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                base_metadata(
+                    {
+                        "linux/amd64": "2" * 40,
+                        "linux/arm64": "2" * 40,
+                    }
+                ),
+                "",
+            )
+
+        provider = LiveProvider(object(), runner)
+
+        with self.assertRaisesRegex(BuildInputError, "linux/arm/v7 metadata"):
+            provider.base_image()
+
+    def test_base_resolution_rejects_missing_revision_label(self) -> None:
+        metadata = json.loads(base_metadata())
+        metadata["image"]["linux/arm64"]["config"]["Labels"] = {}
+
+        def runner(command):
+            return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
+
+        provider = LiveProvider(object(), runner)
+
+        with self.assertRaisesRegex(BuildInputError, "linux/arm64 labels is missing"):
+            provider.base_image()
+
+    def test_base_resolution_rejects_platform_revision_disagreement(self) -> None:
+        def runner(command):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                base_metadata(
+                    {
+                        "linux/amd64": "2" * 40,
+                        "linux/arm64": "3" * 40,
+                        "linux/arm/v7": "2" * 40,
+                    }
+                ),
+                "",
+            )
+
+        provider = LiveProvider(object(), runner)
+
+        with self.assertRaisesRegex(BuildInputError, "do not share one OCI revision"):
+            provider.base_image()
+
+    def test_base_resolution_rejects_missing_sha_tag(self) -> None:
+        def runner(command):
+            if command[4] == "saltydk/alpine-s6overlay:latest":
+                return subprocess.CompletedProcess(command, 0, base_metadata(), "")
+            return subprocess.CompletedProcess(command, 1, "", "manifest unknown")
+
+        provider = LiveProvider(object(), runner)
+
+        with self.assertRaisesRegex(BuildInputError, "failed to inspect base image SHA tag"):
+            provider.base_image()
+
+    def test_base_resolution_rejects_sha_tag_digest_mismatch(self) -> None:
+        def runner(command):
+            if command[4] == "saltydk/alpine-s6overlay:latest":
+                return subprocess.CompletedProcess(command, 0, base_metadata(), "")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"digest":"sha256:' + "3" * 64 + '"}',
+                "",
+            )
+
+        provider = LiveProvider(object(), runner)
+
+        with self.assertRaisesRegex(BuildInputError, "does not match the latest manifest digest"):
+            provider.base_image()
 
 
 class MatrixTests(unittest.TestCase):

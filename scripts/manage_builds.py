@@ -34,12 +34,16 @@ REQUIRED_ARGS = (
 )
 ARG_PATTERN = re.compile(r"^ARG\s+([A-Z0-9_]+)=(?:\"([^\"]*)\"|(\S+))\s*$", re.MULTILINE)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_PATTERN = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 MAIN_REPOSITORY = "userdocs/qbittorrent-nox-static"
 LEGACY_REPOSITORY = "userdocs/qbittorrent-nox-static-legacy"
 MAIN_METADATA_URL = f"https://github.com/{MAIN_REPOSITORY}/releases/latest/download/dependency-version.json"
 LEGACY_METADATA_URL = f"https://github.com/{LEGACY_REPOSITORY}/releases/latest/download/dependency-version.json"
-BASE_IMAGE_TAG = "saltydk/alpine-s6overlay:latest"
+BASE_IMAGE_REPOSITORY = "saltydk/alpine-s6overlay"
+BASE_IMAGE_TAG = f"{BASE_IMAGE_REPOSITORY}:latest"
+BASE_IMAGE_PLATFORMS = ("linux/amd64", "linux/arm64", "linux/arm/v7")
+OCI_REVISION_LABEL = "org.opencontainers.image.revision"
 IMAGE_REPOSITORY = "saltydk/qbittorrent"
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
@@ -196,7 +200,7 @@ class LiveProvider:
             "inspect",
             BASE_IMAGE_TAG,
             "--format",
-            "{{json .Manifest}}",
+            "{{json .}}",
         ]
         completed = self.runner(command)
         if completed.returncode != 0:
@@ -206,9 +210,47 @@ class LiveProvider:
             manifest_json = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
             raise BuildInputError("base image inspection returned invalid JSON") from error
-        manifest = _mapping(manifest_json, "base image manifest")
+        metadata = _mapping(manifest_json, "base image metadata")
+        manifest = _mapping(metadata.get("manifest"), "base image manifest")
         digest = _required_string(manifest, "digest", "base image manifest")
-        base_image = f"{BASE_IMAGE_TAG}@{digest}"
+        images = _mapping(metadata.get("image"), "base image platform metadata")
+        revisions: set[str] = set()
+        for platform in BASE_IMAGE_PLATFORMS:
+            image = _mapping(images.get(platform), f"base image {platform} metadata")
+            config = _mapping(image.get("config"), f"base image {platform} config")
+            labels = _mapping(config.get("Labels"), f"base image {platform} labels")
+            revision = _required_string(labels, OCI_REVISION_LABEL, f"base image {platform} labels")
+            if not GIT_SHA_PATTERN.fullmatch(revision):
+                raise BuildInputError(f"base image {platform} has an invalid OCI revision label")
+            revisions.add(revision)
+        if len(revisions) != 1:
+            raise BuildInputError("base image platforms do not share one OCI revision label")
+
+        revision = revisions.pop()
+        sha_tag = f"{BASE_IMAGE_REPOSITORY}:sha-{revision}"
+        tag_command = [
+            "docker",
+            "buildx",
+            "imagetools",
+            "inspect",
+            sha_tag,
+            "--format",
+            "{{json .Manifest}}",
+        ]
+        tag_completed = self.runner(tag_command)
+        if tag_completed.returncode != 0:
+            detail = tag_completed.stderr.strip() or tag_completed.stdout.strip() or "unknown error"
+            raise BuildInputError(f"failed to inspect base image SHA tag: {detail}")
+        try:
+            tag_manifest_json = json.loads(tag_completed.stdout)
+        except json.JSONDecodeError as error:
+            raise BuildInputError("base image SHA tag inspection returned invalid JSON") from error
+        tag_manifest = _mapping(tag_manifest_json, "base image SHA tag manifest")
+        tag_digest = _required_string(tag_manifest, "digest", "base image SHA tag manifest")
+        if tag_digest != digest:
+            raise BuildInputError("base image SHA tag does not match the latest manifest digest")
+
+        base_image = f"{sha_tag}@{digest}"
         if not BASE_IMAGE_PATTERN.fullmatch(base_image):
             raise BuildInputError("base image manifest returned an invalid digest")
         return base_image

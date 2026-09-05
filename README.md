@@ -39,8 +39,9 @@ docker buildx build --platform linux/arm64 -f Dockerfile.libtorrent2 .
 docker buildx build --platform linux/amd64 -f Dockerfile.legacy .
 ```
 
-Each Dockerfile pins the shared base image by manifest digest and verifies the
-qBittorrent binary checksum for both supported architectures.
+Each Dockerfile pins the shared base image by its source-commit tag and manifest
+digest, and verifies the qBittorrent binary checksum for both supported
+architectures.
 
 ## Updates and security
 
@@ -51,6 +52,8 @@ APK-only update dispatches a rebuild without changing the upstream revision.
 Every build verifies the tracked release, revision, and architecture checksums
 against upstream metadata before it can publish.
 Builds boot each variant, authenticate to its Web API, validate its version and
-libtorrent line, and scan the resulting image before publishing. Renovate owns
-GitHub Actions and scanner updates; the image updater exclusively owns the base
-digest.
+libtorrent line, and scan the resulting image before publishing. Trivy applies
+the Alpine vendor advisory policy; Docker Scout reports broader advisory data
+and blocks fixable HIGH/CRITICAL or CISA KEV findings. Renovate owns GitHub
+Actions and scanner updates; the image updater exclusively owns the base source
+tag and digest.
