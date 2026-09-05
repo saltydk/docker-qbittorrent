@@ -9,9 +9,10 @@ The repository publishes three image variants for `linux/amd64` and
 | `libtorrent2` | Current | 2.0 | `libtorrent2` |
 | `legacy` | 4.3.9 | 1.2 | `legacy` |
 
-Every build also publishes `<release>` and `<release>-<image revision>` tags.
-The exact revision tag changes whenever a binary, base image, or installed APK
-package changes.
+Every build also publishes `<release>` and `<release>-<upstream revision>`
+tags. The revision is the upstream static-binary build revision. Base-image and
+APK-only rebuilds republish the same versioned tag and moving aliases without
+changing that upstream revision.
 
 ## Run
 
@@ -43,9 +44,13 @@ qBittorrent binary checksum for both supported architectures.
 
 ## Updates and security
 
-The scheduled updater checks qBittorrent releases, both architecture-specific
-binary digests, the base-image manifest, and available Alpine package upgrades.
+The scheduled updater checks qBittorrent releases, upstream build revisions,
+both architecture-specific binary digests, the base-image manifest, and
+available Alpine package upgrades. Tracked input changes are committed; an
+APK-only update dispatches a rebuild without changing the upstream revision.
+Every build verifies the tracked release, revision, and architecture checksums
+against upstream metadata before it can publish.
 Builds boot each variant, authenticate to its Web API, validate its version and
 libtorrent line, and scan the resulting image before publishing. Renovate owns
 GitHub Actions and scanner updates; the image updater exclusively owns the base
-digest so it can increment all affected image revisions together.
+digest.

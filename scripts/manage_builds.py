@@ -28,7 +28,6 @@ REQUIRED_ARGS = (
     "BASE_IMAGE",
     "QBITTORRENT_REPOSITORY",
     "QBITTORRENT_RELEASE",
-    "QBITTORRENT_UPSTREAM_REVISION",
     "QBITTORRENT_REVISION",
     "QBITTORRENT_SHA256_AMD64",
     "QBITTORRENT_SHA256_ARM64",
@@ -55,21 +54,20 @@ class VariantState:
     dockerfile: str
     repository: str
     release: str
-    upstream_revision: int
-    image_revision: int
+    revision: int
     sha256_amd64: str
     sha256_arm64: str
     base_image: str
 
     @property
-    def exact_tag(self) -> str:
-        return f"{self.release}-{self.image_revision}"
+    def versioned_tag(self) -> str:
+        return f"{self.release}-{self.revision}"
 
 
 @dataclass(frozen=True)
 class ArtifactTarget:
     release: str
-    upstream_revision: int
+    revision: int
     sha256_amd64: str
     sha256_arm64: str
 
@@ -81,6 +79,10 @@ class UpdateDecision:
 
     @property
     def changed(self) -> bool:
+        return any(reason in {"release", "revision", "binary", "base"} for reason in self.reasons)
+
+    @property
+    def rebuild(self) -> bool:
         return bool(self.reasons) and self.reasons != ("pending-publication",)
 
 
@@ -212,7 +214,7 @@ class LiveProvider:
         return base_image
 
     def is_published(self, variant: VariantState) -> bool:
-        tag = quote(variant.exact_tag, safe="")
+        tag = quote(variant.versioned_tag, safe="")
         response = self.http.get_json(
             f"https://hub.docker.com/v2/repositories/{IMAGE_REPOSITORY}/tags/{tag}",
             allow_not_found=True,
@@ -220,7 +222,7 @@ class LiveProvider:
         return response is not None
 
     def packages_outdated(self, variant: VariantState) -> bool:
-        image = f"{IMAGE_REPOSITORY}:{variant.exact_tag}"
+        image = f"{IMAGE_REPOSITORY}:{variant.versioned_tag}"
         command = [
             "docker",
             "run",
@@ -258,20 +260,18 @@ def parse_variant(name: str, dockerfile: str, text: str) -> VariantState:
     _validate_sha256(values["QBITTORRENT_SHA256_ARM64"], "QBITTORRENT_SHA256_ARM64")
 
     try:
-        upstream_revision = int(values["QBITTORRENT_UPSTREAM_REVISION"])
-        image_revision = int(values["QBITTORRENT_REVISION"])
+        revision = int(values["QBITTORRENT_REVISION"])
     except ValueError as error:
-        raise BuildInputError(f"{dockerfile} revisions must be non-negative integers") from error
-    if upstream_revision < 0 or image_revision < 0:
-        raise BuildInputError(f"{dockerfile} revisions must be non-negative integers")
+        raise BuildInputError(f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer") from error
+    if revision < 0:
+        raise BuildInputError(f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer")
 
     return VariantState(
         name=name,
         dockerfile=dockerfile,
         repository=values["QBITTORRENT_REPOSITORY"],
         release=values["QBITTORRENT_RELEASE"],
-        upstream_revision=upstream_revision,
-        image_revision=image_revision,
+        revision=revision,
         sha256_amd64=values["QBITTORRENT_SHA256_AMD64"],
         sha256_arm64=values["QBITTORRENT_SHA256_ARM64"],
         base_image=values["BASE_IMAGE"],
@@ -283,8 +283,7 @@ def render_variant(text: str, state: VariantState) -> str:
         "BASE_IMAGE": state.base_image,
         "QBITTORRENT_REPOSITORY": state.repository,
         "QBITTORRENT_RELEASE": state.release,
-        "QBITTORRENT_UPSTREAM_REVISION": str(state.upstream_revision),
-        "QBITTORRENT_REVISION": str(state.image_revision),
+        "QBITTORRENT_REVISION": str(state.revision),
         "QBITTORRENT_SHA256_AMD64": state.sha256_amd64,
         "QBITTORRENT_SHA256_ARM64": state.sha256_arm64,
     }
@@ -355,17 +354,18 @@ def compute_update(
     _validate_sha256(target.sha256_arm64, "target arm64 checksum")
     if not BASE_IMAGE_PATTERN.fullmatch(base_image):
         raise BuildInputError("target base image must include a sha256 manifest digest")
-    if target.upstream_revision < 0:
+    if target.revision < 0:
         raise BuildInputError("target upstream revision must be non-negative")
 
     release_changed = current.release != target.release
+    revision_changed = current.revision != target.revision
     binary_changed = (
         current.sha256_amd64 != target.sha256_amd64
         or current.sha256_arm64 != target.sha256_arm64
     )
     base_changed = current.base_image != base_image
 
-    if not published and not (release_changed or binary_changed or base_changed):
+    if not published and not (release_changed or revision_changed or binary_changed or base_changed):
         if packages_outdated:
             return UpdateDecision(current, ("pending-publication",))
         return UpdateDecision(current, ())
@@ -373,8 +373,11 @@ def compute_update(
     reasons: list[str] = []
     if release_changed:
         reasons.append("release")
-    elif binary_changed:
-        reasons.append("binary")
+    else:
+        if revision_changed:
+            reasons.append("revision")
+        if binary_changed:
+            reasons.append("binary")
     if base_changed:
         reasons.append("base")
     if packages_outdated:
@@ -383,22 +386,12 @@ def compute_update(
     if not reasons:
         return UpdateDecision(current, ())
 
-    if release_changed:
-        image_revision = target.upstream_revision
-    elif not published:
-        revision_floor = target.upstream_revision if binary_changed else current.image_revision
-        image_revision = max(current.image_revision, revision_floor)
-    else:
-        revision_floor = target.upstream_revision if binary_changed else current.image_revision + 1
-        image_revision = max(current.image_revision + 1, revision_floor)
-
     updated = replace(
         current,
-        release=target.release if release_changed else current.release,
-        upstream_revision=target.upstream_revision if release_changed or binary_changed else current.upstream_revision,
-        image_revision=image_revision,
-        sha256_amd64=target.sha256_amd64 if release_changed or binary_changed else current.sha256_amd64,
-        sha256_arm64=target.sha256_arm64 if release_changed or binary_changed else current.sha256_arm64,
+        release=target.release,
+        revision=target.revision,
+        sha256_amd64=target.sha256_amd64,
+        sha256_arm64=target.sha256_arm64,
         base_image=base_image,
     )
     return UpdateDecision(updated, tuple(reasons))
@@ -426,6 +419,30 @@ def plan_updates(
     return decisions
 
 
+def validate_artifact_inputs(
+    states: Mapping[str, VariantState],
+    targets: Mapping[str, ArtifactTarget],
+) -> None:
+    for name, current in states.items():
+        target = targets.get(name)
+        if target is None:
+            raise BuildInputError(f"no upstream artifact target was resolved for {name}")
+        if current.revision != target.revision:
+            raise BuildInputError(
+                f"{name} QBITTORRENT_REVISION is {current.revision}; "
+                f"upstream requires {target.revision}"
+            )
+        if current.release != target.release:
+            raise BuildInputError(
+                f"{name} QBITTORRENT_RELEASE is {current.release}; "
+                f"upstream requires {target.release}"
+            )
+        if current.sha256_amd64 != target.sha256_amd64:
+            raise BuildInputError(f"{name} amd64 checksum does not match the upstream artifact")
+        if current.sha256_arm64 != target.sha256_arm64:
+            raise BuildInputError(f"{name} arm64 checksum does not match the upstream artifact")
+
+
 def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
     selected: set[str] = set()
     for path in changed_paths:
@@ -441,24 +458,9 @@ def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
     return tuple(name for name in VARIANT_ORDER if name in selected)
 
 
-def revision_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
-    selected: set[str] = set()
-    for path in changed_paths:
-        if path.startswith("root/"):
-            selected.update(VARIANT_ORDER)
-        elif path.startswith("root-legacy/"):
-            selected.add("legacy")
-        else:
-            for name, dockerfile in DOCKERFILES.items():
-                if path == dockerfile:
-                    selected.add(name)
-                    break
-    return tuple(name for name in VARIANT_ORDER if name in selected)
-
-
 def _tags(state: VariantState) -> list[str]:
     tags = [
-        f"saltydk/qbittorrent:{state.exact_tag}",
+        f"saltydk/qbittorrent:{state.versioned_tag}",
         f"saltydk/qbittorrent:{state.release}",
         f"saltydk/qbittorrent:{state.name}",
     ]
@@ -483,7 +485,7 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) 
                 "variant": name,
                 "dockerfile": current.dockerfile,
                 "release": current.release,
-                "revision": current.image_revision,
+                "revision": current.revision,
                 "tags": _tags(current),
             }
         )
@@ -499,41 +501,10 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) 
                     "libtorrent_prefix": libtorrent_prefix,
                     "config_profile": config_profile,
                     "release": current.release,
-                    "revision": current.image_revision,
+                    "revision": current.revision,
                 }
             )
     return {"candidates": {"include": candidates}, "publish": {"include": publish}}
-
-
-def validate_revision_changes(
-    before: Mapping[str, VariantState],
-    after: Mapping[str, VariantState],
-    selected: Sequence[str],
-) -> None:
-    for name in selected:
-        if name not in before or name not in after:
-            continue
-        old = before[name]
-        new = after[name]
-        if old.release == new.release and new.image_revision <= old.image_revision:
-            raise BuildInputError(
-                f"{name} image-affecting changes require the image revision to increase"
-            )
-
-
-def _states_at_revision(root: Path, revision: str) -> dict[str, VariantState]:
-    states: dict[str, VariantState] = {}
-    for name, dockerfile in DOCKERFILES.items():
-        completed = subprocess.run(
-            ["git", "show", f"{revision}:{dockerfile}"],
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode == 0:
-            states[name] = parse_variant(name, dockerfile, completed.stdout)
-    return states
 
 
 def _changed_paths(root: Path, before: str, after: str) -> list[str]:
@@ -561,6 +532,7 @@ def _update_report(
     decisions: Mapping[str, UpdateDecision],
 ) -> dict[str, object]:
     changed = [name for name in VARIANT_ORDER if name in decisions and decisions[name].changed]
+    rebuild = [name for name in VARIANT_ORDER if name in decisions and decisions[name].rebuild]
     pending = [
         name
         for name in VARIANT_ORDER
@@ -568,11 +540,12 @@ def _update_report(
     ]
     return {
         "changed": changed,
+        "rebuild": rebuild,
         "pending": pending,
         "variants": {
             name: {
-                "current": states[name].exact_tag,
-                "target": decision.state.exact_tag,
+                "current": states[name].versioned_tag,
+                "target": decision.state.versioned_tag,
                 "reasons": list(decision.reasons),
             }
             for name, decision in decisions.items()
@@ -588,6 +561,8 @@ def _parser() -> argparse.ArgumentParser:
     update = subparsers.add_parser("update")
     update.add_argument("--write", action="store_true")
     update.add_argument("--github-output", type=Path)
+
+    subparsers.add_parser("verify")
 
     matrix = subparsers.add_parser("matrix")
     selection = matrix.add_mutually_exclusive_group(required=True)
@@ -615,9 +590,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "changed": str(bool(report["changed"])).lower(),
                         "changed-variants": json.dumps(report["changed"], separators=(",", ":")),
+                        "rebuild": str(bool(report["rebuild"])).lower(),
+                        "rebuild-variants": json.dumps(report["rebuild"], separators=(",", ":")),
                         "report": json.dumps(report, separators=(",", ":")),
                     },
                 )
+        elif args.command == "verify":
+            provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
+            validate_artifact_inputs(states, provider.artifact_targets())
+            report = {"verified": list(VARIANT_ORDER)}
         else:
             if args.all:
                 selected = VARIANT_ORDER
@@ -629,8 +610,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     changed_paths = _changed_paths(root, args.before, args.after)
                     selected = select_variants(changed_paths)
-                    before_states = _states_at_revision(root, args.before)
-                    validate_revision_changes(before_states, states, revision_variants(changed_paths))
             matrices = build_matrices(states, selected)
             report = {"selected": list(selected), **matrices}
             if args.github_output:

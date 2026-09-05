@@ -19,9 +19,8 @@ from scripts.manage_builds import (
     parse_variant,
     plan_updates,
     render_variant,
-    revision_variants,
     select_variants,
-    validate_revision_changes,
+    validate_artifact_inputs,
     write_updates,
 )
 
@@ -33,8 +32,7 @@ BASE_NEW = "saltydk/alpine-s6overlay:latest@sha256:" + "2" * 64
 def state(
     name: str = "libtorrent1",
     release: str = "release-5.2.3_v1.2.20",
-    upstream_revision: int = 5,
-    image_revision: int = 6,
+    revision: int = 5,
     amd64: str = "a" * 64,
     arm64: str = "b" * 64,
     base_image: str = BASE_OLD,
@@ -45,8 +43,7 @@ def state(
         dockerfile=f"Dockerfile.{name}",
         repository=repository,
         release=release,
-        upstream_revision=upstream_revision,
-        image_revision=image_revision,
+        revision=revision,
         sha256_amd64=amd64,
         sha256_arm64=arm64,
         base_image=base_image,
@@ -54,23 +51,23 @@ def state(
 
 
 class ComputeUpdateTests(unittest.TestCase):
-    def test_same_release_binary_change_never_downgrades_local_revision(self) -> None:
-        current = state(name="legacy", release="release-4.3.9_v1.2.20", upstream_revision=7, image_revision=9)
+    def test_same_release_binary_change_keeps_upstream_revision(self) -> None:
+        current = state(name="legacy", release="release-4.3.9_v1.2.20", revision=7)
         target = ArtifactTarget(current.release, 7, current.sha256_amd64, "c" * 64)
 
         decision = compute_update(current, target, BASE_OLD, packages_outdated=False, published=True)
 
-        self.assertEqual(decision.state.image_revision, 10)
+        self.assertEqual(decision.state.revision, 7)
         self.assertEqual(decision.state.sha256_arm64, "c" * 64)
         self.assertEqual(decision.reasons, ("binary",))
 
-    def test_base_change_increments_image_revision_once(self) -> None:
+    def test_base_change_keeps_upstream_revision(self) -> None:
         current = state()
-        target = ArtifactTarget(current.release, current.upstream_revision, current.sha256_amd64, current.sha256_arm64)
+        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
 
         decision = compute_update(current, target, BASE_NEW, packages_outdated=False, published=True)
 
-        self.assertEqual(decision.state.image_revision, 7)
+        self.assertEqual(decision.state.revision, 5)
         self.assertEqual(decision.state.base_image, BASE_NEW)
         self.assertEqual(decision.reasons, ("base",))
 
@@ -80,37 +77,47 @@ class ComputeUpdateTests(unittest.TestCase):
 
         decision = compute_update(current, target, BASE_NEW, packages_outdated=True, published=True)
 
-        self.assertEqual(decision.state.image_revision, 0)
-        self.assertEqual(decision.state.upstream_revision, 0)
+        self.assertEqual(decision.state.revision, 0)
         self.assertEqual(decision.reasons, ("release", "base", "packages"))
 
-    def test_combined_same_release_changes_increment_only_once(self) -> None:
-        current = state(image_revision=8)
+    def test_combined_same_release_changes_use_upstream_revision(self) -> None:
+        current = state(revision=8)
         target = ArtifactTarget(current.release, 10, "c" * 64, "d" * 64)
 
         decision = compute_update(current, target, BASE_NEW, packages_outdated=True, published=True)
 
-        self.assertEqual(decision.state.image_revision, 10)
-        self.assertEqual(decision.reasons, ("binary", "base", "packages"))
+        self.assertEqual(decision.state.revision, 10)
+        self.assertEqual(decision.reasons, ("revision", "binary", "base", "packages"))
 
-    def test_pending_exact_tag_blocks_another_package_revision(self) -> None:
+    def test_unpublished_unchanged_input_blocks_package_rebuild(self) -> None:
         current = state()
-        target = ArtifactTarget(current.release, current.upstream_revision, current.sha256_amd64, current.sha256_arm64)
+        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
 
         decision = compute_update(current, target, BASE_OLD, packages_outdated=True, published=False)
 
         self.assertEqual(decision.state, current)
         self.assertEqual(decision.reasons, ("pending-publication",))
 
-    def test_base_change_reuses_an_unpublished_image_revision(self) -> None:
-        current = state(image_revision=6)
-        target = ArtifactTarget(current.release, current.upstream_revision, current.sha256_amd64, current.sha256_arm64)
+    def test_base_change_keeps_revision_when_version_tag_is_unpublished(self) -> None:
+        current = state()
+        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
 
         decision = compute_update(current, target, BASE_NEW, packages_outdated=False, published=False)
 
-        self.assertEqual(decision.state.image_revision, 6)
+        self.assertEqual(decision.state.revision, 5)
         self.assertEqual(decision.state.base_image, BASE_NEW)
         self.assertEqual(decision.reasons, ("base",))
+
+    def test_package_only_update_requests_rebuild_without_changing_inputs(self) -> None:
+        current = state()
+        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
+
+        decision = compute_update(current, target, BASE_OLD, packages_outdated=True, published=True)
+
+        self.assertEqual(decision.state, current)
+        self.assertFalse(decision.changed)
+        self.assertTrue(decision.rebuild)
+        self.assertEqual(decision.reasons, ("packages",))
 
 
 class DockerfileTests(unittest.TestCase):
@@ -119,19 +126,18 @@ class DockerfileTests(unittest.TestCase):
 FROM ${{BASE_IMAGE}}
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
-ARG QBITTORRENT_UPSTREAM_REVISION="5"
-ARG QBITTORRENT_REVISION="6"
+ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
 ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
 '''
 
         current = parse_variant("libtorrent1", "Dockerfile.libtorrent1", text)
-        updated = state(base_image=BASE_NEW, image_revision=7)
+        updated = state(base_image=BASE_NEW)
         rendered = render_variant(text, updated)
 
         self.assertEqual(current, state())
         self.assertIn(f'ARG BASE_IMAGE="{BASE_NEW}"', rendered)
-        self.assertIn('ARG QBITTORRENT_REVISION="7"', rendered)
+        self.assertIn('ARG QBITTORRENT_REVISION="5"', rendered)
         self.assertEqual(parse_variant("libtorrent1", "Dockerfile.libtorrent1", rendered), updated)
 
     def test_missing_required_argument_fails_closed(self) -> None:
@@ -142,8 +148,7 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
         template = '''ARG BASE_IMAGE="{base}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
-ARG QBITTORRENT_UPSTREAM_REVISION="5"
-ARG QBITTORRENT_REVISION="6"
+ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{amd64}"
 ARG QBITTORRENT_SHA256_ARM64="{arm64}"
 '''
@@ -166,8 +171,7 @@ ARG QBITTORRENT_SHA256_ARM64="{arm64}"
         original = f'''ARG BASE_IMAGE="{BASE_OLD}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
-ARG QBITTORRENT_UPSTREAM_REVISION="5"
-ARG QBITTORRENT_REVISION="6"
+ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
 ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
 '''
@@ -190,6 +194,21 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
 
 
 class SourceTests(unittest.TestCase):
+    def test_artifact_validation_rejects_non_upstream_revision(self) -> None:
+        current = state(revision=6)
+        target = ArtifactTarget(
+            current.release,
+            5,
+            current.sha256_amd64,
+            current.sha256_arm64,
+        )
+
+        with self.assertRaisesRegex(
+            BuildInputError,
+            "libtorrent1 QBITTORRENT_REVISION is 6; upstream requires 5",
+        ):
+            validate_artifact_inputs({"libtorrent1": current}, {"libtorrent1": target})
+
     def test_extracts_both_supported_asset_checksums(self) -> None:
         release = {
             "assets": [
@@ -215,7 +234,7 @@ class SourceTests(unittest.TestCase):
                 return {
                     "libtorrent1": ArtifactTarget(
                         current.release,
-                        current.upstream_revision,
+                        current.revision,
                         current.sha256_amd64,
                         current.sha256_arm64,
                     )
@@ -300,8 +319,6 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(select_variants(["root-legacy/etc/cont-init.d/10-config"]), ("legacy",))
         self.assertEqual(select_variants(["root/etc/services.d/qbittorrent/run"]), ("libtorrent1", "libtorrent2", "legacy"))
         self.assertEqual(select_variants([".github/workflows/security-scan.yml"]), ("libtorrent1", "libtorrent2", "legacy"))
-        self.assertEqual(revision_variants([".github/workflows/security-scan.yml"]), ())
-        self.assertEqual(revision_variants(["root/etc/services.d/qbittorrent/run"]), ("libtorrent1", "libtorrent2", "legacy"))
 
     def test_build_matrices_preserve_aliases_and_expand_platforms(self) -> None:
         states = {name: state(name=name) for name in ("libtorrent1", "libtorrent2", "legacy")}
@@ -316,7 +333,7 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(
             matrices["publish"]["include"][0]["tags"],
             [
-                "saltydk/qbittorrent:release-5.2.3_v1.2.20-6",
+                "saltydk/qbittorrent:release-5.2.3_v1.2.20-5",
                 "saltydk/qbittorrent:release-5.2.3_v1.2.20",
                 "saltydk/qbittorrent:libtorrent1",
                 "saltydk/qbittorrent:latest",
@@ -324,25 +341,11 @@ class MatrixTests(unittest.TestCase):
         )
         self.assertNotIn("saltydk/qbittorrent:latest", matrices["publish"]["include"][1]["tags"])
 
-    def test_same_release_image_change_requires_revision_increment(self) -> None:
-        before = {"libtorrent1": state(image_revision=6)}
-        after = {"libtorrent1": state(image_revision=6, base_image=BASE_NEW)}
-
-        with self.assertRaisesRegex(BuildInputError, "libtorrent1.*revision"):
-            validate_revision_changes(before, after, ("libtorrent1",))
-
-    def test_new_release_may_reset_revision(self) -> None:
-        before = {"libtorrent1": state(image_revision=8)}
-        after = {"libtorrent1": state(release="release-5.2.4_v1.2.20", upstream_revision=0, image_revision=0)}
-
-        validate_revision_changes(before, after, ("libtorrent1",))
-
     def test_matrix_cli_emits_candidate_and_publish_matrices(self) -> None:
         template = '''ARG BASE_IMAGE="{base}"
 ARG QBITTORRENT_REPOSITORY="{repository}"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
-ARG QBITTORRENT_UPSTREAM_REVISION="5"
-ARG QBITTORRENT_REVISION="6"
+ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{amd64}"
 ARG QBITTORRENT_SHA256_ARM64="{arm64}"
 '''
