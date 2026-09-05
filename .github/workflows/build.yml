@@ -1,67 +1,218 @@
 name: build
 
 on:
-  workflow_dispatch:
-  push:
-    paths-ignore:
-      - '*.md'
+  pull_request:
     branches:
-      - 'libtorrent2'
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
+  security-events: write
+
+concurrency:
+  group: qbittorrent-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: saltydk/qbittorrent
+  # renovate: datasource=github-releases depName=aquasecurity/trivy
+  TRIVY_VERSION: v0.74.0
 
 jobs:
-  find-latest-version:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Run updater tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Check shell scripts
+        run: |
+          shellcheck scripts/test-image.sh
+          shellcheck -s sh root/etc/cont-init.d/10-config root-legacy/etc/cont-init.d/10-config
+          shellcheck -s bash root/etc/services.d/qbittorrent/run root-legacy/etc/services.d/qbittorrent/run
+
+      - name: Check workflows
+        uses: docker://rhysd/actionlint:1.7.12
+
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      qbt-version: ${{ steps.set-latest-version.outputs.qbt-version }}
-      qbt-release: ${{ steps.set-latest-version.outputs.qbt-release }}
+      has-builds: ${{ steps.matrix.outputs.has-builds }}
+      candidate-matrix: ${{ steps.matrix.outputs.candidate-matrix }}
+      publish-matrix: ${{ steps.matrix.outputs.publish-matrix }}
     steps:
-      - uses: actions/checkout@v7
-      - id: set-latest-version
-        run: |
-          release=$(awk -F'"' '/^ARG QBITTORRENT_RELEASE=/{print $2}' Dockerfile)
-          revision=$(awk -F'"' '/^ARG QBITTORRENT_REVISION=/{print $2}' Dockerfile)
-          echo "qbt-version=${release}-${revision}" >> "$GITHUB_OUTPUT"
-          echo "qbt-release=${release}" >> "$GITHUB_OUTPUT"
-
-  docker:
-    runs-on: ubuntu-latest
-    needs: find-latest-version
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v6
+      - uses: actions/checkout@v7.0.1
         with:
-          images: saltydk/qbittorrent
+          fetch-depth: 0
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v4
+      - name: Select image variants
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/manage_builds.py matrix --before "$BASE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+          else
+            python3 scripts/manage_builds.py matrix --before "$BEFORE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+          fi
+
+  test-candidate:
+    needs:
+      - static
+      - prepare
+    if: needs.prepare.outputs.has-builds == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.candidate-matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.3.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.3.0
+
+      - name: Build candidate
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          platforms: ${{ matrix.platform }}
+          pull: true
+          tags: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}
+          cache-from: type=gha,scope=qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
+          cache-to: type=gha,scope=qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }},mode=max
+
+      - name: Test candidate
+        run: >-
+          scripts/test-image.sh
+          "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+          "${{ matrix.platform }}"
+          "${{ matrix.architecture }}"
+          "${{ matrix.variant }}"
+          "${{ matrix.qbittorrent_version }}"
+          "${{ matrix.libtorrent_prefix }}"
+          "${{ matrix.config_profile }}"
+
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          cache: true
+          version: ${{ env.TRIVY_VERSION }}
+
+      - name: Generate vulnerability report
+        run: |
+          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+            --format sarif --output "trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif" \
+            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+
+      - name: Enforce vulnerability policy
+        run: |
+          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+            --ignore-unfixed --exit-code 1 \
+            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+
+      - name: Upload vulnerability report
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
+          sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
+
+  publish:
+    needs:
+      - prepare
+      - test-candidate
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      needs.prepare.outputs.has-builds == 'true' &&
+      needs.test-candidate.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.publish-matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.3.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.3.0
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        id: docker_build
-        uses: docker/build-push-action@v7
+      - name: Publish image
+        id: docker-build
+        uses: docker/build-push-action@v7.3.0
         with:
-          platforms: linux/amd64
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           pull: true
-          sbom: true
           push: true
-          tags: |
-            saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-version }}
-            saltydk/qbittorrent:${{ needs.find-latest-version.outputs.qbt-release }}
-            saltydk/qbittorrent:libtorrent2
+          sbom: true
+          tags: ${{ join(matrix.tags, ',') }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=qbittorrent-${{ matrix.variant }}-amd64
+            type=gha,scope=qbittorrent-${{ matrix.variant }}-arm64
+          cache-to: type=gha,scope=qbittorrent-${{ matrix.variant }}-publish,mode=max
 
-      - uses: sarisia/actions-status-discord@v1
+      - name: Notify Discord
         if: always()
+        uses: sarisia/actions-status-discord@v1
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
+
+  acceptance:
+    if: always()
+    needs:
+      - static
+      - prepare
+      - test-candidate
+      - publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          STATIC_RESULT: ${{ needs.static.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          HAS_BUILDS: ${{ needs.prepare.outputs.has-builds }}
+          TEST_RESULT: ${{ needs.test-candidate.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        run: |
+          [[ "$STATIC_RESULT" == "success" ]]
+          [[ "$PREPARE_RESULT" == "success" ]]
+          if [[ "$HAS_BUILDS" == "true" ]]; then
+            [[ "$TEST_RESULT" == "success" ]]
+            if [[ "$EVENT_NAME" != "pull_request" ]]; then
+              [[ "$PUBLISH_RESULT" == "success" ]]
+            fi
+          fi

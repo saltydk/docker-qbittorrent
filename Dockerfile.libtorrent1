@@ -1,0 +1,59 @@
+ARG BASE_IMAGE="saltydk/alpine-s6overlay:latest@sha256:c9d43115f1b45ba0f6fad8973f4581f53418a524d9f16d9ff54d2adde26486f9"
+
+FROM ${BASE_IMAGE}
+
+ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
+ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
+ARG QBITTORRENT_UPSTREAM_REVISION="5"
+ARG QBITTORRENT_REVISION="6"
+ARG QBITTORRENT_SHA256_AMD64="0d3b7f4879b2a8b0413c6e76a471eeccfc5895d318bc615d76a7a17346767d34"
+ARG QBITTORRENT_SHA256_ARM64="f99d0f9eb15a96d712f52362794276796fc693873be502b45fdbc777e3b17d2c"
+ARG TARGETARCH
+
+LABEL maintainer="salty"
+
+ENV \
+  HOME="/config" \
+  XDG_CONFIG_HOME="/config" \
+  XDG_DATA_HOME="/config" \
+  # 3 minutes for services to exit
+  S6_SERVICES_GRACETIME=180000 \
+  S6_KILL_GRACETIME=3000
+
+# Install packages
+RUN \
+  echo "**** install packages for ${QBITTORRENT_RELEASE}-${QBITTORRENT_REVISION} ****" \
+  && apk upgrade --no-cache \
+  && apk add --no-cache \
+    bind-tools \
+    ca-certificates \
+    curl \
+    mediainfo \
+    openssl \
+    procps \
+    tar \
+    unzip \
+    wget \
+    zlib
+
+RUN \
+  case "${TARGETARCH}" in \
+    "amd64") QBITTORRENT_ARCH="x86_64"; QBITTORRENT_SHA256="${QBITTORRENT_SHA256_AMD64}" ;; \
+    "arm64") QBITTORRENT_ARCH="aarch64"; QBITTORRENT_SHA256="${QBITTORRENT_SHA256_ARM64}" ;; \
+    *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && echo "**** install qbittorrent-nox ****" \
+  && curl -sSfL -o /usr/bin/qbittorrent-nox \
+    "https://github.com/${QBITTORRENT_REPOSITORY}/releases/download/${QBITTORRENT_RELEASE}/${QBITTORRENT_ARCH}-qbittorrent-nox" \
+  && echo "${QBITTORRENT_SHA256}  /usr/bin/qbittorrent-nox" | sha256sum -c - \
+  && chmod 755 /usr/bin/qbittorrent-nox \
+  && echo "**** cleanup ****" \
+  && rm -rf \
+    /root/.cache \
+    /tmp/*
+
+# Add root files
+COPY ["root/", "/"]
+
+VOLUME ["/config", "/downloads"]
+EXPOSE 8080/tcp

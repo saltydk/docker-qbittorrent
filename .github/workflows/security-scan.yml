@@ -1,0 +1,91 @@
+name: security-scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 2 * * *'
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  IMAGE: saltydk/qbittorrent
+  # renovate: datasource=github-releases depName=aquasecurity/trivy
+  TRIVY_VERSION: v0.74.0
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.candidate-matrix }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Build scan matrix
+        id: matrix
+        run: python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
+
+  scan:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.3.0
+
+      - name: Test published image
+        run: >-
+          scripts/test-image.sh
+          "${IMAGE}:${{ matrix.variant }}"
+          "${{ matrix.platform }}"
+          "${{ matrix.architecture }}"
+          "${{ matrix.variant }}"
+          "${{ matrix.qbittorrent_version }}"
+          "${{ matrix.libtorrent_prefix }}"
+          "${{ matrix.config_profile }}"
+
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          cache: true
+          version: ${{ env.TRIVY_VERSION }}
+
+      - name: Generate vulnerability report
+        run: |
+          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+            --platform "${{ matrix.platform }}" \
+            --format sarif --output "trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif" \
+            "${IMAGE}:${{ matrix.variant }}"
+
+      - name: Enforce vulnerability policy
+        run: |
+          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+            --platform "${{ matrix.platform }}" \
+            --ignore-unfixed --exit-code 1 "${IMAGE}:${{ matrix.variant }}"
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
+          sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
+
+  security:
+    if: always()
+    needs:
+      - prepare
+      - scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify scan jobs
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+        run: |
+          [[ "$PREPARE_RESULT" == "success" ]]
+          [[ "$SCAN_RESULT" == "success" ]]

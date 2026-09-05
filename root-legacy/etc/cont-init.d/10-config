@@ -1,0 +1,61 @@
+#!/command/with-contenv sh
+
+# Config folder
+QB_CONFIG="${XDG_CONFIG_HOME}/qBittorrent"
+# Config file
+QB_CONFIG_FILE="${QB_CONFIG}/qBittorrent.conf"
+
+# Folders
+mkdir -p \
+    "${QB_CONFIG}" \
+    /config/log
+
+# https://github.com/qbittorrent/qBittorrent/blob/master/src/base/settingsstorage.cpp
+if [ ! -f "${QB_CONFIG_FILE}" ]; then
+  echo "Initializing qBittorrent configuration..."
+  cat > "${QB_CONFIG_FILE}" <<EOL
+[Application]
+FileLogger\Enabled=true
+FileLogger\Path=/config/log
+
+[BitTorrent]
+Session\AsyncIOThreadsCount=4
+Session\BTProtocol=TCP
+Session\CoalesceReadWrite=false
+Session\ConnectionSpeed=100
+Session\DisableAutoTMMByDefault=false
+Session\DisableAutoTMMTriggers\CategorySavePathChanged=false
+Session\FilePoolSize=5000
+Session\MultiConnectionsPerIp=true
+Session\PieceExtentAffinity=true
+Session\Port=56881
+Session\Preallocation=true
+Session\SendBufferLowWatermark=1024
+Session\SendBufferWatermark=10240
+Session\SendBufferWatermarkFactor=250
+Session\SocketBacklogSize=1000
+Session\SuggestMode=true
+
+[Network]
+PortForwardingEnabled=false
+Proxy\OnlyForTorrents=false
+
+[Preferences]
+Bittorrent\MaxConnecs=-1
+Bittorrent\MaxConnecsPerTorrent=-1
+Bittorrent\MaxUploads=-1
+Bittorrent\MaxUploadsPerTorrent=-1
+Connection\ResolvePeerCountries=false
+Downloads\SavePath=/mnt/unionfs/downloads/torrents/qbittorrent/completed
+Downloads\TempPath=/mnt/unionfs/downloads/torrents/qbittorrent/incoming
+General\Locale=en
+WebUI\Address=*
+WebUI\Port=8080
+WebUI\LocalHostAuth=true
+WebUI\UseUPnP=false
+EOL
+fi
+
+# Permissions
+chown -R abc:abc \
+    /config

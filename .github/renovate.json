@@ -1,0 +1,81 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":separateMajorReleases",
+    ":ignoreUnstable"
+  ],
+  "baseBranchPatterns": [
+    "$default"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "dependencyDashboard": true,
+  "rebaseWhen": "conflicted",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "addLabels": [
+      "security",
+      "vulnerability"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "The image updater owns base digests and image revisions together",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "saltydk/alpine-s6overlay"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Group GitHub Actions patch updates",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Automerge digest and patch updates after acceptance",
+      "matchUpdateTypes": [
+        "digest",
+        "patch"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Review minor and major updates",
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "automerge": false,
+      "labels": [
+        "dependencies",
+        "manual-review"
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pinned Trivy scanner version",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+TRIVY_VERSION:\\s+(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "semver-coerced"
+    }
+  ]
+}
