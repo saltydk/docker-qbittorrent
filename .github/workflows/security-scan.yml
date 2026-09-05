@@ -82,6 +82,7 @@ jobs:
           sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Generate Docker Scout vulnerability report
+        if: ${{ !cancelled() }}
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
@@ -100,6 +101,7 @@ jobs:
           sarif_file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Enforce actionable Docker Scout findings
+        if: ${{ !cancelled() }}
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
@@ -114,6 +116,7 @@ jobs:
           write-comment: false
 
       - name: Enforce CISA KEV Docker Scout findings
+        if: ${{ !cancelled() }}
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
