@@ -22,6 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      - name: Prime Trivy binary cache
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          cache: true
+          version: ${{ env.TRIVY_VERSION }}
+
       - name: Build scan matrix
         id: matrix
         run: python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
@@ -74,6 +80,51 @@ jobs:
         with:
           category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
+
+      - name: Generate Docker Scout vulnerability report
+        uses: docker/scout-action@v1.24.0
+        with:
+          command: cves
+          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
+          platform: ${{ matrix.platform }}
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          sarif-file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
+          write-comment: false
+
+      - name: Upload Docker Scout vulnerability report
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          category: scout-qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
+          sarif_file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
+
+      - name: Enforce actionable Docker Scout findings
+        uses: docker/scout-action@v1.24.0
+        with:
+          command: cves
+          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
+          platform: ${{ matrix.platform }}
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          only-fixed: true
+          only-severities: critical,high
+          exit-code: true
+          summary: false
+          write-comment: false
+
+      - name: Enforce CISA KEV Docker Scout findings
+        uses: docker/scout-action@v1.24.0
+        with:
+          command: cves
+          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
+          platform: ${{ matrix.platform }}
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          only-cisa-kev: true
+          exit-code: true
+          summary: false
+          write-comment: false
 
   security:
     if: always()
