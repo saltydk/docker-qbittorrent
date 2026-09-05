@@ -35,12 +35,14 @@ REQUIRED_ARGS = (
 ARG_PATTERN = re.compile(r"^ARG\s+([A-Z0-9_]+)=(?:\"([^\"]*)\"|(\S+))\s*$", re.MULTILINE)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
-BASE_IMAGE_PATTERN = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+BASE_IMAGE_REPOSITORY = "saltydk/alpine-s6overlay"
+BASE_IMAGE_PATTERN = re.compile(
+    rf"^{re.escape(BASE_IMAGE_REPOSITORY)}:sha-[0-9a-f]{{40}}@sha256:[0-9a-f]{{64}}$"
+)
 MAIN_REPOSITORY = "userdocs/qbittorrent-nox-static"
 LEGACY_REPOSITORY = "userdocs/qbittorrent-nox-static-legacy"
 MAIN_METADATA_URL = f"https://github.com/{MAIN_REPOSITORY}/releases/latest/download/dependency-version.json"
 LEGACY_METADATA_URL = f"https://github.com/{LEGACY_REPOSITORY}/releases/latest/download/dependency-version.json"
-BASE_IMAGE_REPOSITORY = "saltydk/alpine-s6overlay"
 BASE_IMAGE_TAG = f"{BASE_IMAGE_REPOSITORY}:latest"
 BASE_IMAGE_PLATFORMS = ("linux/amd64", "linux/arm64", "linux/arm/v7")
 OCI_REVISION_LABEL = "org.opencontainers.image.revision"
@@ -252,7 +254,7 @@ class LiveProvider:
 
         base_image = f"{sha_tag}@{digest}"
         if not BASE_IMAGE_PATTERN.fullmatch(base_image):
-            raise BuildInputError("base image manifest returned an invalid digest")
+            raise BuildInputError("base image manifest returned an invalid source SHA tag or digest")
         return base_image
 
     def is_published(self, variant: VariantState) -> bool:
@@ -297,7 +299,7 @@ def parse_variant(name: str, dockerfile: str, text: str) -> VariantState:
         raise BuildInputError(f"{dockerfile} is missing required arguments: {', '.join(missing)}")
 
     if not BASE_IMAGE_PATTERN.fullmatch(values["BASE_IMAGE"]):
-        raise BuildInputError(f"{dockerfile} BASE_IMAGE must include a sha256 manifest digest")
+        raise BuildInputError(f"{dockerfile} BASE_IMAGE must include the source SHA tag and manifest digest")
     _validate_sha256(values["QBITTORRENT_SHA256_AMD64"], "QBITTORRENT_SHA256_AMD64")
     _validate_sha256(values["QBITTORRENT_SHA256_ARM64"], "QBITTORRENT_SHA256_ARM64")
 
@@ -395,7 +397,7 @@ def compute_update(
     _validate_sha256(target.sha256_amd64, "target amd64 checksum")
     _validate_sha256(target.sha256_arm64, "target arm64 checksum")
     if not BASE_IMAGE_PATTERN.fullmatch(base_image):
-        raise BuildInputError("target base image must include a sha256 manifest digest")
+        raise BuildInputError("target base image must include the source SHA tag and manifest digest")
     if target.revision < 0:
         raise BuildInputError("target upstream revision must be non-negative")
 

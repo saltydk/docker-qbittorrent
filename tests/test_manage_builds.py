@@ -171,6 +171,18 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
         with self.assertRaisesRegex(BuildInputError, "QBITTORRENT_RELEASE"):
             parse_variant("libtorrent1", "Dockerfile.libtorrent1", 'ARG BASE_IMAGE="alpine"\n')
 
+    def test_parse_rejects_base_without_source_sha_tag(self) -> None:
+        text = f'''ARG BASE_IMAGE="saltydk/alpine-s6overlay:latest@sha256:{'1' * 64}"
+ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
+ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
+ARG QBITTORRENT_REVISION="5"
+ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
+ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
+'''
+
+        with self.assertRaisesRegex(BuildInputError, "source SHA tag and manifest digest"):
+            parse_variant("libtorrent1", "Dockerfile.libtorrent1", text)
+
     def test_load_states_rejects_mismatched_base_images(self) -> None:
         template = '''ARG BASE_IMAGE="{base}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
