@@ -23,7 +23,7 @@
   },
   "packageRules": [
     {
-      "description": "The image updater owns the base source tag and manifest digest together",
+      "description": "The image updater owns the base source tag, manifest digest, and inherited package locks together",
       "matchDatasources": [
         "docker"
       ],

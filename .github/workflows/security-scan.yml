@@ -21,6 +21,8 @@ jobs:
       matrix: ${{ steps.matrix.outputs.candidate-matrix }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Prime Trivy binary cache
         uses: aquasecurity/setup-trivy@v0.3.1
@@ -40,6 +42,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.3.0

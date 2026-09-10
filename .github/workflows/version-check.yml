@@ -6,7 +6,6 @@ on:
     - cron: '0 */6 * * *'
 
 permissions:
-  actions: write
   contents: read
 
 concurrency:
@@ -16,12 +15,20 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      source-sha: ${{ steps.source.outputs.source-sha }}
+      rebuild: ${{ steps.update.outputs.rebuild }}
+      rebuild-variants: ${{ steps.update.outputs.rebuild-variants }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: main
-          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.3.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.3.0
@@ -30,30 +37,58 @@ jobs:
         id: update
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/manage_builds.py update --write --github-output "$GITHUB_OUTPUT"
+        run: >-
+          python3 scripts/manage_builds.py update --write
+          --github-output "$GITHUB_OUTPUT"
+          --report update-report.json
+          --summary "$GITHUB_STEP_SUMMARY"
 
-      - name: Summarize decisions
+      - name: Verify resolved inputs
         env:
-          REPORT: ${{ steps.update.outputs.report }}
-        run: |
-          {
-            echo '## Image input decisions'
-            echo
-            jq . <<< "$REPORT"
-          } >> "$GITHUB_STEP_SUMMARY"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/manage_builds.py verify
 
       - name: Commit image inputs
         if: steps.update.outputs.changed == 'true'
         run: |
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add Dockerfile.libtorrent1 Dockerfile.libtorrent2 Dockerfile.legacy
+          git add Dockerfile.libtorrent1 Dockerfile.libtorrent2 Dockerfile.legacy packages/runtime/*.lock
           git diff --cached --check
-          git commit -m "build(images): refresh image inputs"
+          {
+            echo 'build(images): refresh image inputs'
+            echo
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.build_report import render_markdown
+          print(render_markdown(json.loads(Path('update-report.json').read_text())))
+          PY
+          } > "$RUNNER_TEMP/commit-message"
+          git commit --cleanup=verbatim --file "$RUNNER_TEMP/commit-message"
           git push origin HEAD:main
 
-      - name: Rebuild for package updates
-        if: steps.update.outputs.changed != 'true' && steps.update.outputs.rebuild == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run build.yml --ref main
+      - name: Select committed source
+        id: source
+        run: echo "source-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload update report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbittorrent-update-report
+          path: update-report.json
+          if-no-files-found: error
+
+  build:
+    if: needs.update.outputs.rebuild == 'true'
+    needs: update
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/build.yml
+    with:
+      source-sha: ${{ needs.update.outputs.source-sha }}
+      variants: ${{ needs.update.outputs.rebuild-variants }}
+      publish: true
+    secrets: inherit

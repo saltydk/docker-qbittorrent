@@ -12,10 +12,19 @@ import re
 import subprocess
 import sys
 import time
-from typing import Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+# Support both direct script execution in CI and imports from the test suite.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.package_locks import (
+    BaseUpdateRequired, LockError, PackageLock, input_files_digest, lock_path, package_changes, parse_lock,
+    resolve_lock, validate_lock, write_files,
+)
 
 
 VARIANT_ORDER = ("libtorrent1", "libtorrent2", "legacy")
@@ -85,21 +94,11 @@ class UpdateDecision:
 
     @property
     def changed(self) -> bool:
-        return any(reason in {"release", "revision", "binary", "base"} for reason in self.reasons)
+        return any(reason in {"release", "revision", "binary", "base", "packages"} for reason in self.reasons)
 
     @property
     def rebuild(self) -> bool:
-        return bool(self.reasons) and self.reasons != ("pending-publication",)
-
-
-class UpdateProvider(Protocol):
-    def artifact_targets(self) -> Mapping[str, ArtifactTarget]: ...
-
-    def base_image(self) -> str: ...
-
-    def is_published(self, variant: VariantState) -> bool: ...
-
-    def packages_outdated(self, variant: VariantState) -> bool: ...
+        return bool(self.reasons)
 
 
 class HttpClient:
@@ -194,6 +193,40 @@ class LiveProvider:
         targets["legacy"] = self._target(LEGACY_REPOSITORY, legacy_release, legacy_revision)
         return targets
 
+    def referenced_targets(self, states: Mapping[str, VariantState]) -> Mapping[str, ArtifactTarget]:
+        """Validate committed release assets without discovering newer releases."""
+        targets = {}
+        for name, current in states.items():
+            metadata = _mapping(self.http.get_json(
+                f"https://github.com/{current.repository}/releases/download/"
+                f"{quote(current.release, safe='')}/dependency-version.json"
+            ), f"{current.release} dependency metadata")
+            targets[name] = self._target(current.repository, current.release,
+                                         _revision(metadata, "revision", current.release))
+        return targets
+
+    def is_current(self, variant: VariantState, input_sha: str) -> bool:
+        if not self.is_published(variant):
+            return False
+        image = f"{IMAGE_REPOSITORY}:{variant.versioned_tag}"
+        completed = self.runner(["docker", "buildx", "imagetools", "inspect", image,
+                                 "--format", "{{json .Image}}"])
+        if completed.returncode:
+            raise BuildInputError(f"failed to inspect published {image}: {completed.stderr.strip()}")
+        try:
+            images = _mapping(json.loads(completed.stdout), "published image platforms")
+        except json.JSONDecodeError as error:
+            raise BuildInputError(f"invalid published image metadata for {image}") from error
+        for platform, _, _ in PLATFORMS:
+            if platform not in images:
+                return False
+            platform_image = _mapping(images[platform], f"published {platform} image")
+            config = _mapping(platform_image.get("config"), f"published {platform} config")
+            labels = _mapping(config.get("Labels") or {}, f"published {platform} labels")
+            if labels.get("io.saltydk.image-inputs.sha256") != input_sha:
+                return False
+        return True
+
     def base_image(self) -> str:
         command = [
             "docker",
@@ -264,27 +297,6 @@ class LiveProvider:
             allow_not_found=True,
         )
         return response is not None
-
-    def packages_outdated(self, variant: VariantState) -> bool:
-        image = f"{IMAGE_REPOSITORY}:{variant.versioned_tag}"
-        command = [
-            "docker",
-            "run",
-            "--pull=always",
-            "--rm",
-            "--platform",
-            "linux/amd64",
-            "--entrypoint",
-            "/bin/sh",
-            image,
-            "-ec",
-            'apk update >/dev/null; apk version -l "<"',
-        ]
-        completed = self.runner(command)
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
-            raise BuildInputError(f"failed to check packages in {image}: {detail}")
-        return any(re.search(r"\s<\s", line) for line in completed.stdout.splitlines())
 
 
 def _validate_sha256(value: str, field: str) -> None:
@@ -391,8 +403,7 @@ def compute_update(
     target: ArtifactTarget,
     base_image: str,
     *,
-    packages_outdated: bool,
-    published: bool,
+    packages_changed: bool,
 ) -> UpdateDecision:
     _validate_sha256(target.sha256_amd64, "target amd64 checksum")
     _validate_sha256(target.sha256_arm64, "target arm64 checksum")
@@ -409,11 +420,6 @@ def compute_update(
     )
     base_changed = current.base_image != base_image
 
-    if not published and not (release_changed or revision_changed or binary_changed or base_changed):
-        if packages_outdated:
-            return UpdateDecision(current, ("pending-publication",))
-        return UpdateDecision(current, ())
-
     reasons: list[str] = []
     if release_changed:
         reasons.append("release")
@@ -424,7 +430,7 @@ def compute_update(
             reasons.append("binary")
     if base_changed:
         reasons.append("base")
-    if packages_outdated:
+    if packages_changed:
         reasons.append("packages")
 
     if not reasons:
@@ -439,28 +445,6 @@ def compute_update(
         base_image=base_image,
     )
     return UpdateDecision(updated, tuple(reasons))
-
-
-def plan_updates(
-    states: Mapping[str, VariantState],
-    provider: UpdateProvider,
-) -> dict[str, UpdateDecision]:
-    targets = provider.artifact_targets()
-    base_image = provider.base_image()
-    decisions: dict[str, UpdateDecision] = {}
-    for name, current in states.items():
-        if name not in targets:
-            raise BuildInputError(f"no artifact target was resolved for {name}")
-        published = provider.is_published(current)
-        packages_outdated = provider.packages_outdated(current) if published else True
-        decisions[name] = compute_update(
-            current,
-            targets[name],
-            base_image,
-            packages_outdated=packages_outdated,
-            published=published,
-        )
-    return decisions
 
 
 def validate_artifact_inputs(
@@ -490,7 +474,8 @@ def validate_artifact_inputs(
 def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
     selected: set[str] = set()
     for path in changed_paths:
-        if path.startswith("root/") or path.startswith(".github/workflows/") or path == "scripts/manage_builds.py":
+        if (path.startswith(("root/", "packages/", ".github/workflows/"))
+                or path in {"scripts/manage_builds.py", "scripts/package_locks.py"}):
             selected.update(VARIANT_ORDER)
         elif path.startswith("root-legacy/"):
             selected.add("legacy")
@@ -500,6 +485,97 @@ def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
                     selected.add(name)
                     break
     return tuple(name for name in VARIANT_ORDER if name in selected)
+
+
+def image_inputs_digest(root: Path, name: str, overrides: Mapping[Path, str] | None = None) -> str:
+    overrides = overrides or {}
+    paths = {root / DOCKERFILES[name]}
+    for directory in ("packages", "root", *(("root-legacy",) if name == "legacy" else ())):
+        paths.update(path for path in (root / directory).rglob("*") if path.is_file() or path.is_symlink())
+    paths.update(overrides)
+    paths = {path for path in paths if path.name == DOCKERFILES[name]
+             or path.relative_to(root).parts[0] in {"packages", "root", "root-legacy"}}
+    if name != "legacy":
+        paths = {p for p in paths if p.relative_to(root).parts[0] != "root-legacy"}
+    return input_files_digest(root, list(paths), overrides)
+
+
+@dataclass
+class PreparedUpdate:
+    files: dict[Path, str]
+    report: dict[str, object]
+
+    def write(self) -> None:
+        write_files(self.files)
+
+
+def prepare_updates(root: Path, provider: LiveProvider, *, resolver=resolve_lock) -> PreparedUpdate:
+    """Resolve one complete input set before writing or requesting a build."""
+    states = load_states(root)
+    targets = provider.artifact_targets()
+    parent = provider.base_image()
+    locks: dict[str, PackageLock] = {}
+    old_locks: dict[str, PackageLock | None] = {}
+    files: dict[Path, str] = {}
+    for platform, _, architecture in PLATFORMS:
+        path = lock_path(root, "runtime", architecture)
+        old_text = path.read_text(encoding="utf-8") if path.exists() else None
+        old_locks[architecture] = parse_lock(old_text) if old_text is not None else None
+        lock = resolver(root, "runtime", platform, parent, inherited=True)
+        locks[architecture] = lock
+        if old_text != lock.render():
+            files[path] = lock.render()
+    packages_changed = bool(files)
+    decisions: dict[str, UpdateDecision] = {}
+    for name, current in states.items():
+        if name not in targets:
+            raise BuildInputError(f"no artifact target was resolved for {name}")
+        decision = compute_update(current, targets[name], parent,
+                                  packages_changed=packages_changed)
+        path = root / current.dockerfile
+        original = path.read_text(encoding="utf-8")
+        rendered = render_variant(original, decision.state)
+        if rendered != original:
+            files[path] = rendered
+        decisions[name] = decision
+
+    # Verify publication against the content relevant to each image, rather than
+    # the current branch SHA (other variants or documentation may have changed).
+    for name, decision in decisions.items():
+        if not decision.reasons and not provider.is_current(
+                decision.state, image_inputs_digest(root, name, files)):
+            decisions[name] = UpdateDecision(decision.state, ("pending-publication",))
+
+    changed = [name for name, decision in decisions.items() if decision.changed]
+    rebuild = [name for name, decision in decisions.items() if decision.reasons]
+    pending = [name for name, decision in decisions.items() if decision.reasons == ("pending-publication",)]
+    images = []
+    for name, current in states.items():
+        target = decisions[name].state
+        for platform, slug, architecture in PLATFORMS:
+            old = old_locks[architecture]
+            lock = locks[architecture]
+            inputs = [
+                {"name": "qBittorrent release", "old": current.release, "new": target.release},
+                {"name": "qBittorrent revision", "old": str(current.revision), "new": str(target.revision)},
+                {"name": "base image", "old": current.base_image, "new": target.base_image},
+                {"name": "qBittorrent binary SHA-256", "old": getattr(current, f"sha256_{slug}"),
+                 "new": getattr(target, f"sha256_{slug}")},
+            ]
+            if old is None:
+                inputs.append({"name": "initial package lock", "old": None, "new": lock.digest})
+            images.append({"name": name, "platform": platform, "stage": "runtime",
+                           "changes": package_changes(old.packages, lock.packages) if old else None,
+                           "inputs": inputs, "lock_digest": lock.digest,
+                           "packages": lock.packages})
+    report = {"schema": 1, "kind": "update", "repository": "saltydk/docker-qbittorrent",
+              "status": "update-available" if files else "pending-publication" if pending else "no-changes",
+              "changed": changed, "rebuild": rebuild, "pending": pending, "images": images,
+              "changed_files": [p.relative_to(root).as_posix() for p in sorted(files)],
+              "variants": {name: {"current": states[name].versioned_tag,
+                                   "target": decision.state.versioned_tag, "reasons": list(decision.reasons)}
+                           for name, decision in decisions.items()}}
+    return PreparedUpdate(files, report)
 
 
 def _tags(state: VariantState) -> list[str]:
@@ -513,7 +589,8 @@ def _tags(state: VariantState) -> list[str]:
     return tags
 
 
-def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) -> dict[str, object]:
+def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str],
+                   root: Path | None = None) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
     publish: list[dict[str, object]] = []
     for name in selected:
@@ -524,6 +601,7 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) 
         qbittorrent_version = release_match.group(1)
         libtorrent_prefix = "2.0." if name == "libtorrent2" else "1.2."
         config_profile = "legacy" if name == "legacy" else "modern"
+        input_sha = image_inputs_digest(root, name) if root is not None else ""
         publish.append(
             {
                 "variant": name,
@@ -531,6 +609,7 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) 
                 "release": current.release,
                 "revision": current.revision,
                 "tags": _tags(current),
+                "input_sha": input_sha,
             }
         )
         for platform, slug, architecture in PLATFORMS:
@@ -546,6 +625,7 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str]) 
                     "config_profile": config_profile,
                     "release": current.release,
                     "revision": current.revision,
+                    "input_sha": input_sha,
                 }
             )
     return {"candidates": {"include": candidates}, "publish": {"include": publish}}
@@ -571,32 +651,6 @@ def _write_github_outputs(path: Path, values: Mapping[str, str]) -> None:
             output.write(f"{key}={value}\n")
 
 
-def _update_report(
-    states: Mapping[str, VariantState],
-    decisions: Mapping[str, UpdateDecision],
-) -> dict[str, object]:
-    changed = [name for name in VARIANT_ORDER if name in decisions and decisions[name].changed]
-    rebuild = [name for name in VARIANT_ORDER if name in decisions and decisions[name].rebuild]
-    pending = [
-        name
-        for name in VARIANT_ORDER
-        if name in decisions and decisions[name].reasons == ("pending-publication",)
-    ]
-    return {
-        "changed": changed,
-        "rebuild": rebuild,
-        "pending": pending,
-        "variants": {
-            name: {
-                "current": states[name].versioned_tag,
-                "target": decision.state.versioned_tag,
-                "reasons": list(decision.reasons),
-            }
-            for name, decision in decisions.items()
-        },
-    }
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -605,6 +659,8 @@ def _parser() -> argparse.ArgumentParser:
     update = subparsers.add_parser("update")
     update.add_argument("--write", action="store_true")
     update.add_argument("--github-output", type=Path)
+    update.add_argument("--report", type=Path)
+    update.add_argument("--summary", type=Path)
 
     subparsers.add_parser("verify")
 
@@ -612,6 +668,7 @@ def _parser() -> argparse.ArgumentParser:
     selection = matrix.add_mutually_exclusive_group(required=True)
     selection.add_argument("--all", action="store_true")
     selection.add_argument("--before")
+    selection.add_argument("--variants", help="JSON list of explicit variant names")
     matrix.add_argument("--after")
     matrix.add_argument("--github-output", type=Path)
     return parser
@@ -624,10 +681,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         states = load_states(root)
         if args.command == "update":
             provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
-            decisions = plan_updates(states, provider)
+            prepared = prepare_updates(root, provider)
             if args.write:
-                write_updates(root, decisions)
-            report = _update_report(states, decisions)
+                prepared.write()
+            report = prepared.report
+            from scripts.build_report import write_report
+            write_report(report, json_path=args.report, summary_path=args.summary)
             if args.github_output:
                 _write_github_outputs(
                     args.github_output,
@@ -641,11 +700,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
         elif args.command == "verify":
             provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
-            validate_artifact_inputs(states, provider.artifact_targets())
+            validate_artifact_inputs(states, provider.referenced_targets(states))
+            for _, _, architecture in PLATFORMS:
+                validate_lock(root, "runtime", architecture, states["libtorrent1"].base_image)
             report = {"verified": list(VARIANT_ORDER)}
         else:
             if args.all:
                 selected = VARIANT_ORDER
+            elif args.variants is not None:
+                try:
+                    requested = json.loads(args.variants)
+                except json.JSONDecodeError as error:
+                    raise BuildInputError("--variants must be a JSON array of known variant names") from error
+                if (not isinstance(requested, list) or any(not isinstance(name, str) or name not in VARIANT_ORDER
+                                                          for name in requested)
+                        or len(set(requested)) != len(requested)):
+                    raise BuildInputError("--variants must contain unique known variant names")
+                selected = tuple(name for name in VARIANT_ORDER if name in requested)
             else:
                 if not args.after:
                     raise BuildInputError("matrix --before requires --after")
@@ -654,7 +725,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     changed_paths = _changed_paths(root, args.before, args.after)
                     selected = select_variants(changed_paths)
-            matrices = build_matrices(states, selected)
+            matrices = build_matrices(states, selected, root)
             report = {"selected": list(selected), **matrices}
             if args.github_output:
                 _write_github_outputs(
@@ -665,7 +736,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "publish-matrix": json.dumps(matrices["publish"], separators=(",", ":")),
                     },
                 )
-    except (BuildInputError, OSError) as error:
+    except (BuildInputError, LockError, OSError) as error:
+        if args.command == "update":
+            from scripts.build_report import write_report
+            failure = {"schema": 1, "kind": "update", "repository": "saltydk/docker-qbittorrent",
+                       "status": "waiting-for-base" if isinstance(error, BaseUpdateRequired) else "failed",
+                       "error": str(error), "images": []}
+            write_report(failure, json_path=args.report, summary_path=args.summary)
         print(str(error), file=sys.stderr)
         return 1
 

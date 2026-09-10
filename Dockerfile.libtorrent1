@@ -1,4 +1,4 @@
-ARG BASE_IMAGE="saltydk/alpine-s6overlay:sha-63345a14b2cee6a7879bf928641bf4e247a464fb@sha256:d4a57ff4e550e4aad8d48e2bf22315ad2106e7185eb18d5aae67da9627fe4c79"
+ARG BASE_IMAGE="saltydk/alpine-s6overlay:sha-b1cd6b8601d57f1d001db77be2fb45fe1ecb8bf7@sha256:7dec7e6df96c087bcf290dbd314f3db7af00a5177da3ccf8e2a4c4ee3827d17e"
 
 FROM ${BASE_IMAGE}
 
@@ -19,21 +19,13 @@ ENV \
   S6_SERVICES_GRACETIME=180000 \
   S6_KILL_GRACETIME=3000
 
-# Install packages
-RUN \
-  echo "**** install packages for ${QBITTORRENT_RELEASE}-${QBITTORRENT_REVISION} ****" \
-  && apk upgrade --no-cache \
-  && apk add --no-cache \
-    bind-tools \
-    ca-certificates \
-    curl \
-    mediainfo \
-    openssl \
-    procps \
-    tar \
-    unzip \
-    wget \
-    zlib
+# Install the complete package set selected by the updater.
+COPY packages/runtime/ /tmp/apk-locks/
+RUN apk_arch="$(apk --print-arch)" \
+  && /usr/local/libexec/apk-lock install "/tmp/apk-locks/${apk_arch}.lock" inherited \
+  && mkdir -p /usr/share/image-inputs \
+  && cp "/tmp/apk-locks/${apk_arch}.lock" /usr/share/image-inputs/runtime.lock \
+  && rm -rf /tmp/apk-locks
 
 RUN \
   case "${TARGETARCH}" in \
@@ -53,6 +45,17 @@ RUN \
 
 # Add root files
 COPY ["root/", "/"]
+
+ARG BASE_IMAGE
+ARG APK_LOCKS_SHA256
+ARG IMAGE_INPUTS_SHA256
+LABEL io.saltydk.apk-locks.sha256="${APK_LOCKS_SHA256}" \
+      io.saltydk.image-inputs.sha256="${IMAGE_INPUTS_SHA256}" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      io.saltydk.qbittorrent.release="${QBITTORRENT_RELEASE}" \
+      io.saltydk.qbittorrent.revision="${QBITTORRENT_REVISION}" \
+      io.saltydk.qbittorrent.sha256.amd64="${QBITTORRENT_SHA256_AMD64}" \
+      io.saltydk.qbittorrent.sha256.arm64="${QBITTORRENT_SHA256_ARM64}"
 
 VOLUME ["/config", "/downloads"]
 EXPOSE 8080/tcp

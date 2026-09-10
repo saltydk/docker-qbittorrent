@@ -17,12 +17,14 @@ from scripts.manage_builds import (
     load_states,
     main,
     parse_variant,
-    plan_updates,
     render_variant,
     select_variants,
     validate_artifact_inputs,
     write_updates,
+    prepare_updates,
+    image_inputs_digest,
 )
+from scripts.package_locks import LockError, PackageLock, requests_digest
 
 
 BASE_REPOSITORY = "saltydk/alpine-s6overlay"
@@ -82,7 +84,7 @@ class ComputeUpdateTests(unittest.TestCase):
         current = state(name="legacy", release="release-4.3.9_v1.2.20", revision=7)
         target = ArtifactTarget(current.release, 7, current.sha256_amd64, "c" * 64)
 
-        decision = compute_update(current, target, BASE_OLD, packages_outdated=False, published=True)
+        decision = compute_update(current, target, BASE_OLD, packages_changed=False)
 
         self.assertEqual(decision.state.revision, 7)
         self.assertEqual(decision.state.sha256_arm64, "c" * 64)
@@ -92,7 +94,7 @@ class ComputeUpdateTests(unittest.TestCase):
         current = state()
         target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
 
-        decision = compute_update(current, target, BASE_NEW, packages_outdated=False, published=True)
+        decision = compute_update(current, target, BASE_NEW, packages_changed=False)
 
         self.assertEqual(decision.state.revision, 5)
         self.assertEqual(decision.state.base_image, BASE_NEW)
@@ -102,7 +104,7 @@ class ComputeUpdateTests(unittest.TestCase):
         current = state()
         target = ArtifactTarget("release-5.2.4_v1.2.20", 0, "c" * 64, "d" * 64)
 
-        decision = compute_update(current, target, BASE_NEW, packages_outdated=True, published=True)
+        decision = compute_update(current, target, BASE_NEW, packages_changed=True)
 
         self.assertEqual(decision.state.revision, 0)
         self.assertEqual(decision.reasons, ("release", "base", "packages"))
@@ -111,38 +113,19 @@ class ComputeUpdateTests(unittest.TestCase):
         current = state(revision=8)
         target = ArtifactTarget(current.release, 10, "c" * 64, "d" * 64)
 
-        decision = compute_update(current, target, BASE_NEW, packages_outdated=True, published=True)
+        decision = compute_update(current, target, BASE_NEW, packages_changed=True)
 
         self.assertEqual(decision.state.revision, 10)
         self.assertEqual(decision.reasons, ("revision", "binary", "base", "packages"))
 
-    def test_unpublished_unchanged_input_blocks_package_rebuild(self) -> None:
+    def test_package_only_update_counts_as_a_tracked_input_change(self) -> None:
         current = state()
         target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
 
-        decision = compute_update(current, target, BASE_OLD, packages_outdated=True, published=False)
+        decision = compute_update(current, target, BASE_OLD, packages_changed=True)
 
         self.assertEqual(decision.state, current)
-        self.assertEqual(decision.reasons, ("pending-publication",))
-
-    def test_base_change_keeps_revision_when_version_tag_is_unpublished(self) -> None:
-        current = state()
-        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
-
-        decision = compute_update(current, target, BASE_NEW, packages_outdated=False, published=False)
-
-        self.assertEqual(decision.state.revision, 5)
-        self.assertEqual(decision.state.base_image, BASE_NEW)
-        self.assertEqual(decision.reasons, ("base",))
-
-    def test_package_only_update_requests_rebuild_without_changing_inputs(self) -> None:
-        current = state()
-        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
-
-        decision = compute_update(current, target, BASE_OLD, packages_outdated=True, published=True)
-
-        self.assertEqual(decision.state, current)
-        self.assertFalse(decision.changed)
+        self.assertTrue(decision.changed)
         self.assertTrue(decision.rebuild)
         self.assertEqual(decision.reasons, ("packages",))
 
@@ -222,8 +205,7 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
                 state(),
                 ArtifactTarget("release-5.2.4_v1.2.20", 0, "c" * 64, "d" * 64),
                 BASE_NEW,
-                packages_outdated=False,
-                published=True,
+                packages_changed=False,
             )
 
             write_updates(root, {"libtorrent1": decision})
@@ -265,33 +247,6 @@ class SourceTests(unittest.TestCase):
         with self.assertRaisesRegex(BuildInputError, "aarch64"):
             extract_asset_checksums(release)
 
-    def test_plan_updates_marks_unpublished_unchanged_input_as_pending(self) -> None:
-        current = state()
-
-        class Provider:
-            def artifact_targets(self):
-                return {
-                    "libtorrent1": ArtifactTarget(
-                        current.release,
-                        current.revision,
-                        current.sha256_amd64,
-                        current.sha256_arm64,
-                    )
-                }
-
-            def base_image(self):
-                return BASE_OLD
-
-            def is_published(self, variant):
-                return False
-
-            def packages_outdated(self, variant):
-                raise AssertionError("an unpublished image must not be probed")
-
-        decisions = plan_updates({"libtorrent1": current}, Provider())
-
-        self.assertEqual(decisions["libtorrent1"].reasons, ("pending-publication",))
-
     def test_live_provider_resolves_three_two_architecture_targets(self) -> None:
         def release(amd64: str, arm64: str):
             return {
@@ -330,7 +285,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(targets["libtorrent2"], ArtifactTarget("release-5.2.3_v2.0.14", 4, "c" * 64, "d" * 64))
         self.assertEqual(targets["legacy"], ArtifactTarget("release-4.3.9_v1.2.20", 7, "e" * 64, "f" * 64))
 
-    def test_live_provider_resolves_base_digest_and_package_upgrades(self) -> None:
+    def test_live_provider_resolves_base_digest(self) -> None:
         class Http:
             def get_json(self, url, allow_not_found=False):
                 return {"name": "published"}
@@ -356,7 +311,6 @@ class SourceTests(unittest.TestCase):
 
         self.assertEqual(provider.base_image(), BASE_NEW)
         self.assertTrue(provider.is_published(state()))
-        self.assertTrue(provider.packages_outdated(state()))
 
     def test_base_resolution_rejects_missing_platform_metadata(self) -> None:
         def runner(command):
@@ -443,6 +397,7 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(select_variants(["root-legacy/etc/cont-init.d/10-config"]), ("legacy",))
         self.assertEqual(select_variants(["root/etc/services.d/qbittorrent/run"]), ("libtorrent1", "libtorrent2", "legacy"))
         self.assertEqual(select_variants([".github/workflows/security-scan.yml"]), ("libtorrent1", "libtorrent2", "legacy"))
+        self.assertEqual(select_variants(["packages/runtime/aarch64.lock"]), ("libtorrent1", "libtorrent2", "legacy"))
 
     def test_build_matrices_preserve_aliases_and_expand_platforms(self) -> None:
         states = {name: state(name=name) for name in ("libtorrent1", "libtorrent2", "legacy")}
@@ -491,6 +446,118 @@ ARG QBITTORRENT_SHA256_ARM64="{arm64}"
             self.assertEqual(report["selected"], ["libtorrent1", "libtorrent2", "legacy"])
             self.assertEqual(len(report["candidates"]["include"]), 6)
             self.assertEqual(len(report["publish"]["include"]), 3)
+
+
+class LockedUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        source = Path(__file__).resolve().parents[1]
+        for name in ("libtorrent1", "libtorrent2", "legacy"):
+            text = (source / f"Dockerfile.{name}").read_text()
+            current = parse_variant(name, f"Dockerfile.{name}", text)
+            (self.root / current.dockerfile).write_text(render_variant(text, current))
+        profile = self.root / "packages/runtime"
+        profile.mkdir(parents=True)
+        (profile / "requested.txt").write_text("xz\n")
+        self.states = load_states(self.root)
+        self.parent = self.states["libtorrent1"].base_image
+        self.published = True
+        self.version = "5.8.3-r0"
+        outer = self
+        class Provider:
+            def artifact_targets(self):
+                return {name: ArtifactTarget(s.release, s.revision, s.sha256_amd64, s.sha256_arm64)
+                        for name, s in outer.states.items()}
+            def base_image(self):
+                return outer.parent
+            def is_current(self, variant, input_sha):
+                return outer.published
+        self.provider = Provider()
+
+    def resolve(self, root, profile, platform, parent, **kwargs):
+        architecture = "x86_64" if platform == "linux/amd64" else "aarch64"
+        return PackageLock(architecture, parent, requests_digest(("xz",)),
+                           {"xz": self.version, "xz-libs": self.version})
+
+    def test_package_updates_are_committed_inputs_without_revision_bumps(self):
+        initial = prepare_updates(self.root, self.provider, resolver=self.resolve)
+        initial.write()
+        self.version = "5.8.4-r0"
+        plan = prepare_updates(self.root, self.provider, resolver=self.resolve)
+        self.assertEqual(plan.report["changed"], ["libtorrent1", "libtorrent2", "legacy"])
+        self.assertEqual(plan.report["images"][0]["changes"], [
+            {"name": "xz", "old": "5.8.3-r0", "new": "5.8.4-r0"},
+            {"name": "xz-libs", "old": "5.8.3-r0", "new": "5.8.4-r0"},
+        ])
+        plan.write()
+        self.assertIn("xz=5.8.4-r0", (self.root / "packages/runtime/x86_64.lock").read_text())
+        self.assertEqual(load_states(self.root)["libtorrent1"].revision, self.states["libtorrent1"].revision)
+        self.assertEqual(prepare_updates(self.root, self.provider, resolver=self.resolve).report["status"], "no-changes")
+
+    def test_failed_architecture_resolution_does_not_write_any_inputs(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        original = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.version = "5.8.4-r0"
+        def fail_arm(root, profile, platform, parent, **kwargs):
+            if platform == "linux/arm64":
+                raise LockError("repository unavailable")
+            return self.resolve(root, profile, platform, parent, **kwargs)
+        with self.assertRaisesRegex(LockError, "unavailable"):
+            prepare_updates(self.root, self.provider, resolver=fail_arm).write()
+        self.assertEqual({p: p.read_bytes() for p in original}, original)
+
+    def test_pending_publication_retries_without_an_empty_input_commit(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        self.published = False
+        plan = prepare_updates(self.root, self.provider, resolver=self.resolve)
+        self.assertEqual(plan.report["status"], "pending-publication")
+        self.assertEqual(plan.report["changed"], [])
+        self.assertEqual(plan.report["rebuild"], ["libtorrent1", "libtorrent2", "legacy"])
+        self.assertEqual(plan.files, {})
+
+    def test_publication_identity_ignores_docs_and_other_variant_changes(self):
+        original = image_inputs_digest(self.root, "libtorrent1")
+        (self.root / "README.md").write_text("documentation changed")
+        with (self.root / "Dockerfile.legacy").open("a") as output:
+            output.write("\n# legacy-only build change\n")
+        self.assertEqual(image_inputs_digest(self.root, "libtorrent1"), original)
+        shared = self.root / "root/etc/services.d/qbittorrent/run"
+        shared.parent.mkdir(parents=True)
+        shared.write_text("exec qbittorrent-nox\n")
+        self.assertNotEqual(image_inputs_digest(self.root, "libtorrent1"), original)
+
+    def test_unknown_or_duplicate_matrix_variants_fail(self):
+        from contextlib import redirect_stderr
+        for value in ('["unknown"]', '["legacy", "legacy"]', '{}', 'broken'):
+            with self.subTest(value=value), redirect_stderr(StringIO()):
+                self.assertEqual(main(["--root", str(self.root), "matrix", "--variants", value]), 1)
+
+    def test_explicit_matrix_selection_builds_only_requested_variants(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--root", str(self.root), "matrix", "--variants", '["legacy"]'])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["selected"], ["legacy"])
+        self.assertEqual(len(report["candidates"]["include"]), 2)
+
+    def test_referenced_artifact_verification_never_looks_up_latest(self):
+        variant = self.states["legacy"]
+        class Http:
+            def get_json(self, url, allow_not_found=False):
+                if "/latest" in url:
+                    raise AssertionError("verification must use the committed release")
+                if url.endswith("dependency-version.json"):
+                    return {"revision": str(variant.revision)}
+                return {"assets": [
+                    {"name": "x86_64-qbittorrent-nox", "digest": "sha256:" + variant.sha256_amd64},
+                    {"name": "aarch64-qbittorrent-nox", "digest": "sha256:" + variant.sha256_arm64},
+                ]}
+        provider = LiveProvider(Http())
+        targets = provider.referenced_targets({"legacy": variant})
+        validate_artifact_inputs({"legacy": variant}, targets)
 
 
 if __name__ == "__main__":

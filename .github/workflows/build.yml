@@ -1,6 +1,22 @@
 name: build
 
 on:
+  workflow_call:
+    inputs:
+      source-sha:
+        description: Exact source revision to check out, label, select, test, and publish
+        required: true
+        type: string
+      variants:
+        description: JSON array of updater-selected variants
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: Publish accepted candidates
+        required: false
+        type: boolean
+        default: false
   pull_request:
     branches:
       - main
@@ -27,6 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Run updater tests
         run: python3 -m unittest discover -s tests -v
@@ -57,10 +75,12 @@ jobs:
       has-builds: ${{ steps.matrix.outputs.has-builds }}
       candidate-matrix: ${{ steps.matrix.outputs.candidate-matrix }}
       publish-matrix: ${{ steps.matrix.outputs.publish-matrix }}
+      locks-sha: ${{ steps.locks.outputs.locks-sha }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Select image variants
         id: matrix
@@ -68,15 +88,28 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+          CALLED_SOURCE_SHA: ${{ inputs.source-sha }}
+          SELECTED_VARIANTS: ${{ inputs.variants }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ -n "$CALLED_SOURCE_SHA" && -n "$SELECTED_VARIANTS" ]]; then
+            python3 scripts/manage_builds.py matrix --variants "$SELECTED_VARIANTS" --github-output "$GITHUB_OUTPUT"
+          elif [[ -n "$CALLED_SOURCE_SHA" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
             python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             python3 scripts/manage_builds.py matrix --before "$BASE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
           else
             python3 scripts/manage_builds.py matrix --before "$BEFORE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
           fi
+
+      - name: Compute lock-set digest
+        id: locks
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from pathlib import Path
+          from scripts.package_locks import locks_digest
+          print(f"locks-sha={locks_digest(Path('.'))}")
+          PY
 
   test-candidate:
     needs:
@@ -89,12 +122,25 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.candidate-matrix) }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.3.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.3.0
+
+      - name: Capture published baseline
+        run: >-
+          python3 scripts/build_report.py snapshot
+          --repository "$GITHUB_REPOSITORY"
+          --image "${{ matrix.variant }}"
+          --platform "${{ matrix.platform }}"
+          --stage runtime
+          --reference "${IMAGE}:${{ matrix.variant }}"
+          --source-sha "${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
+          --output baseline.json
 
       - name: Build candidate
         uses: docker/build-push-action@v7.3.0
@@ -104,14 +150,20 @@ jobs:
           load: true
           platforms: ${{ matrix.platform }}
           pull: true
-          tags: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}
+          tags: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+            io.saltydk.image-inputs.sha256=${{ matrix.input_sha }}
+          build-args: |
+            APK_LOCKS_SHA256=${{ needs.prepare.outputs.locks-sha }}
+            IMAGE_INPUTS_SHA256=${{ matrix.input_sha }}
           cache-from: type=gha,scope=qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           cache-to: type=gha,scope=qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }},mode=max
 
       - name: Test candidate
         run: >-
           scripts/test-image.sh
-          "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+          "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
           "${{ matrix.platform }}"
           "${{ matrix.architecture }}"
           "${{ matrix.variant }}"
@@ -119,23 +171,48 @@ jobs:
           "${{ matrix.libtorrent_prefix }}"
           "${{ matrix.config_profile }}"
 
+      - name: Verify candidate package inventory
+        if: ${{ !cancelled() }}
+        run: >-
+          python3 scripts/build_report.py verify
+          --repository "$GITHUB_REPOSITORY"
+          --image "${{ matrix.variant }}"
+          --platform "${{ matrix.platform }}"
+          --stage runtime
+          --candidate "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
+          --lock "packages/runtime/${{ matrix.architecture }}.lock"
+          --baseline baseline.json
+          --source-sha "${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
+          --output "candidate-${{ matrix.variant }}-${{ matrix.platform_slug }}.json"
+
+      - name: Upload candidate report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbittorrent-candidate-${{ matrix.variant }}-${{ matrix.platform_slug }}
+          path: candidate-${{ matrix.variant }}-${{ matrix.platform_slug }}.json
+          if-no-files-found: error
+
       - name: Set up Trivy
+        if: ${{ !cancelled() }}
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
           cache: true
           version: ${{ env.TRIVY_VERSION }}
 
       - name: Generate vulnerability report
+        if: ${{ !cancelled() }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --format sarif --output "trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif" \
-            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
 
       - name: Enforce vulnerability policy
+        if: ${{ !cancelled() }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --ignore-unfixed --exit-code 1 \
-            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}"
+            "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
 
       - name: Upload vulnerability report
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -149,7 +226,7 @@ jobs:
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
-          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}
+          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           platform: ${{ matrix.platform }}
           dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -168,7 +245,7 @@ jobs:
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
-          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}
+          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           platform: ${{ matrix.platform }}
           dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -183,7 +260,7 @@ jobs:
         uses: docker/scout-action@v1.24.0
         with:
           command: cves
-          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ github.sha }}
+          image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           platform: ${{ matrix.platform }}
           dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -198,7 +275,7 @@ jobs:
       - test-candidate
     if: >-
       always() &&
-      github.event_name != 'pull_request' &&
+      ((inputs.source-sha != '' && inputs.publish) || (inputs.source-sha == '' && github.event_name != 'pull_request')) &&
       needs.prepare.outputs.has-builds == 'true' &&
       needs.test-candidate.result == 'success'
     runs-on: ubuntu-latest
@@ -207,6 +284,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.publish-matrix) }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.3.0
@@ -219,12 +298,27 @@ jobs:
         uses: docker/metadata-action@v6.2.0
         with:
           images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+            io.saltydk.image-inputs.sha256=${{ matrix.input_sha }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Reject superseded publication
+        id: source-guard
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          default_sha=$(git ls-remote --exit-code origin refs/heads/main | awk 'NR == 1 {print $1}')
+          [[ "$default_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$SOURCE_SHA" != "$default_sha" ]]; then
+            echo "Refusing to publish superseded source $SOURCE_SHA; current main is $default_sha." >&2
+            exit 1
+          fi
 
       - name: Publish image
         id: docker-build
@@ -238,10 +332,42 @@ jobs:
           sbom: true
           tags: ${{ join(matrix.tags, ',') }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APK_LOCKS_SHA256=${{ needs.prepare.outputs.locks-sha }}
+            IMAGE_INPUTS_SHA256=${{ matrix.input_sha }}
           cache-from: |
             type=gha,scope=qbittorrent-${{ matrix.variant }}-amd64
             type=gha,scope=qbittorrent-${{ matrix.variant }}-arm64
           cache-to: type=gha,scope=qbittorrent-${{ matrix.variant }}-publish,mode=max
+
+      - name: Record published tags
+        id: record
+        env:
+          PUBLISHED_DIGEST: ${{ steps.docker-build.outputs.digest }}
+          TAGS: ${{ toJSON(matrix.tags) }}
+        run: |
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -r --arg digest "$PUBLISHED_DIGEST" '.[] + "@" + $digest' <<< "$TAGS" \
+            > "published-${{ matrix.variant }}.txt"
+
+      - name: Capture publication outcomes
+        if: always()
+        run: |
+          {
+            echo "${{ matrix.variant }}-source-guard=${{ steps.source-guard.outcome }}"
+            echo "${{ matrix.variant }}-build=${{ steps.docker-build.outcome }}"
+            echo "${{ matrix.variant }}-record=${{ steps.record.outcome }}"
+          } > "publication-${{ matrix.variant }}-outcomes.txt"
+
+      - name: Upload published tags
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbittorrent-published-${{ matrix.variant }}
+          path: |
+            publication-${{ matrix.variant }}-outcomes.txt
+            published-${{ matrix.variant }}.txt
+          if-no-files-found: error
 
       - name: Notify Discord
         if: always()
@@ -258,20 +384,96 @@ jobs:
       - publish
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download candidate reports
+        if: needs.prepare.outputs.has-builds == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: qbittorrent-candidate-*
+          path: candidate-reports
+          merge-multiple: true
+
+      - name: Download update report
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: qbittorrent-update-report
+          path: update-reports
+
+      - name: Download publication records
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: qbittorrent-published-*
+          path: published-tags
+          merge-multiple: true
+
+      - name: Write grouped build report
+        env:
+          STATIC_RESULT: ${{ needs.static.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          TEST_RESULT: ${{ needs.test-candidate.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          HAS_BUILDS: ${{ needs.prepare.outputs.has-builds }}
+          SHOULD_PUBLISH: ${{ (inputs.source-sha != '' && inputs.publish) || (inputs.source-sha == '' && github.event_name != 'pull_request') }}
+          SOURCE_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p candidate-reports update-reports published-tags
+          status=failed
+          if [[ "$HAS_BUILDS" != "true" && "$STATIC_RESULT" == "success" && "$PREPARE_RESULT" == "success" ]]; then
+            status=built
+          elif [[ "$TEST_RESULT" == "success" ]]; then
+            if [[ "$SHOULD_PUBLISH" == "true" ]]; then
+              if [[ "$PUBLISH_RESULT" == "success" ]]; then
+                status=published
+              fi
+            else
+              status=built
+            fi
+          fi
+          args=(--repository "$GITHUB_REPOSITORY" --kind build --status "$status" --source-sha "$SOURCE_SHA"
+            --outcome "static=$STATIC_RESULT" --outcome "prepare=$PREPARE_RESULT"
+            --outcome "candidates=$TEST_RESULT" --outcome "publish=$PUBLISH_RESULT"
+            --source-root . --output build-report.json --summary "$GITHUB_STEP_SUMMARY")
+          while IFS= read -r report; do
+            args+=(--image-report "$report")
+          done < <(find candidate-reports update-reports -type f -name '*.json' -print 2>/dev/null | sort)
+          while IFS= read -r published; do
+            args+=(--published "$published")
+          done < <(find published-tags -type f -name 'published-*.txt' -exec cat {} + 2>/dev/null | sort -u)
+          while IFS='=' read -r key value; do
+            [[ -n "$key" ]] && args+=(--outcome "publication-${key}=${value:-unknown}")
+          done < <(find published-tags -type f -name 'publication-*-outcomes.txt' -exec cat {} + 2>/dev/null)
+          python3 scripts/build_report.py aggregate "${args[@]}"
+
+      - name: Upload grouped build report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbittorrent-build-report-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+          path: build-report.json
+          if-no-files-found: error
+
       - name: Verify required jobs
         env:
-          EVENT_NAME: ${{ github.event_name }}
           STATIC_RESULT: ${{ needs.static.result }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
           HAS_BUILDS: ${{ needs.prepare.outputs.has-builds }}
           TEST_RESULT: ${{ needs.test-candidate.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
+          SHOULD_PUBLISH: ${{ (inputs.source-sha != '' && inputs.publish) || (inputs.source-sha == '' && github.event_name != 'pull_request') }}
         run: |
           [[ "$STATIC_RESULT" == "success" ]]
           [[ "$PREPARE_RESULT" == "success" ]]
           if [[ "$HAS_BUILDS" == "true" ]]; then
             [[ "$TEST_RESULT" == "success" ]]
-            if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            if [[ "$SHOULD_PUBLISH" == "true" ]]; then
               [[ "$PUBLISH_RESULT" == "success" ]]
             fi
           fi

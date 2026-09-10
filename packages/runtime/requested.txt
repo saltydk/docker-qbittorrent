@@ -1,0 +1,11 @@
+# qBittorrent runtime requirements. Packages supplied by the base stay pinned.
+bind-tools
+ca-certificates
+curl
+mediainfo
+openssl
+procps
+tar
+unzip
+wget
+zlib
