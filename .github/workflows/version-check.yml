@@ -91,4 +91,5 @@ jobs:
       source-sha: ${{ needs.update.outputs.source-sha }}
       variants: ${{ needs.update.outputs.rebuild-variants }}
       publish: true
+      has-update-report: true
     secrets: inherit

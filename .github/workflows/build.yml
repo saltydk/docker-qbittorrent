@@ -12,6 +12,10 @@ on:
         required: false
         type: string
         default: ''
+      has-update-report:
+        description: The caller uploaded an update report
+        type: boolean
+        default: false
       publish:
         description: Publish accepted candidates
         required: false
@@ -399,6 +403,7 @@ jobs:
           merge-multiple: true
 
       - name: Download update report
+        if: inputs.has-update-report
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
