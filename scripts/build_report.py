@@ -31,6 +31,7 @@ STAGES = ("runtime", "builder")
 STATUSES = (
     "update-available",
     "no-changes",
+    "no-build-required",
     "waiting-for-base",
     "pending-publication",
     "failed",
@@ -42,6 +43,7 @@ STATUS_LABELS = {
     "pending-publication": "Publication pending",
     "update-available": "Updates available",
     "no-changes": "No changes",
+    "no-build-required": "No image build required",
     "failed": "Failed",
     "built": "Built",
     "published": "Published",
@@ -652,7 +654,7 @@ def aggregate_reports(
         ) if isinstance(item, dict) else ("", "", ""),
     )
     aggregate["images"] = aggregate_images
-    if source_root is not None:
+    if source_root is not None and (status != "no-build-required" or aggregate_images or failed):
         comparisons, source_changed_files = _source_comparisons(
             aggregate_images,
             source_sha,
@@ -768,20 +770,21 @@ def render_markdown(report: Mapping[str, object]) -> str:
                 f"{_markdown(image.get('stage'))} | {baseline_text} | {verification_text} |"
             )
 
-    changes, unavailable_changes = _change_groups(images, "changes")
-    lines.extend(["", "## Package changes", ""])
-    if changes:
-        lines.extend(["| Targets | Package | Previous | Current |", "| --- | --- | --- | --- |"])
-        for targets, name, old, new in changes:
-            lines.append(
-                f"| {'<br>'.join(targets)} | {_markdown(name)} | {_markdown(old)} | {_markdown(new)} |"
-            )
-    elif not unavailable_changes and (images or report.get("status") == "no-changes"):
-        lines.append("No package changes.")
-    elif not unavailable_changes:
-        lines.append("Package delta unavailable; no image evidence was collected.")
-    if unavailable_changes:
-        lines.append("Package delta unavailable for: " + ", ".join(unavailable_changes) + ".")
+    if status != "no-build-required" or images:
+        changes, unavailable_changes = _change_groups(images, "changes")
+        lines.extend(["", "## Package changes", ""])
+        if changes:
+            lines.extend(["| Targets | Package | Previous | Current |", "| --- | --- | --- | --- |"])
+            for targets, name, old, new in changes:
+                lines.append(
+                    f"| {'<br>'.join(targets)} | {_markdown(name)} | {_markdown(old)} | {_markdown(new)} |"
+                )
+        elif not unavailable_changes and (images or report.get("status") == "no-changes"):
+            lines.append("No package changes.")
+        elif not unavailable_changes:
+            lines.append("Package delta unavailable; no image evidence was collected.")
+        if unavailable_changes:
+            lines.append("Package delta unavailable for: " + ", ".join(unavailable_changes) + ".")
 
     inputs, unavailable_inputs = _change_groups(images, "inputs")
     inputs = [row for row in inputs if row[2] != row[3] or row[2] in (None, "")]

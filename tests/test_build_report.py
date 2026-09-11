@@ -573,6 +573,41 @@ class RenderingTests(unittest.TestCase):
 
 
 class AggregateTests(unittest.TestCase):
+    def test_no_build_required_cli_omits_unperformed_comparisons(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "report.json"
+            summary = root / "summary.md"
+            with redirect_stdout(StringIO()):
+                result = main([
+                    "aggregate", "--repository", "example/repo", "--kind", "build",
+                    "--status", "no-build-required", "--source-sha", "a" * 40,
+                    "--source-root", str(root), "--output", str(output),
+                    "--summary", str(summary), "--outcome", "static=success",
+                    "--outcome", "candidates=skipped", "--outcome", "publish=skipped",
+                ])
+            self.assertEqual(result, 0)
+            report = json.loads(output.read_text())
+            markdown = summary.read_text()
+        self.assertEqual(report["status"], "no-build-required")
+        self.assertNotIn("source_comparisons", report)
+        self.assertIn("No image build required", markdown)
+        self.assertNotIn("## Package changes", markdown)
+        self.assertNotIn("## Source comparison", markdown)
+        self.assertNotIn("unavailable", markdown.lower())
+        self.assertIn("| candidates | skipped |", markdown)
+
+    def test_expected_build_without_reports_keeps_missing_evidence_visible(self) -> None:
+        with TemporaryDirectory() as directory:
+            for status in ("built", "failed"):
+                with self.subTest(status=status):
+                    report = aggregate_reports(
+                        "example/repo", "build", status, [],
+                        source_sha="a" * 40, source_root=Path(directory),
+                    )
+                    self.assertEqual(report["source_comparisons"][0]["status"], "unavailable")
+                    self.assertIn("Package delta unavailable", render_markdown(report))
+
     def test_aggregate_cli_reports_source_only_changed_files_from_real_git_history(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

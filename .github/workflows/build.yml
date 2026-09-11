@@ -431,8 +431,8 @@ jobs:
         run: |
           mkdir -p candidate-reports update-reports published-tags
           status=failed
-          if [[ "$HAS_BUILDS" != "true" && "$STATIC_RESULT" == "success" && "$PREPARE_RESULT" == "success" ]]; then
-            status=built
+          if [[ "$HAS_BUILDS" == "false" && "$STATIC_RESULT" == "success" && "$PREPARE_RESULT" == "success" ]]; then
+            status=no-build-required
           elif [[ "$TEST_RESULT" == "success" ]]; then
             if [[ "$SHOULD_PUBLISH" == "true" ]]; then
               if [[ "$PUBLISH_RESULT" == "success" ]]; then
