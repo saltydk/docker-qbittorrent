@@ -405,12 +405,49 @@ class CandidateTests(unittest.TestCase):
 
 
 class RenderingTests(unittest.TestCase):
+    def test_update_report_omits_build_evidence_and_unchanged_inputs(self) -> None:
+        report = {
+            "kind": "update", "repository": "example/repo", "status": "no-changes",
+            "images": [{
+                "name": "one", "platform": "linux/amd64", "stage": "runtime",
+                "changes": [],
+                "inputs": [{"name": "release", "old": "v1", "new": "v1"}],
+            }],
+        }
+        markdown = render_markdown(report)
+        self.assertIn("Up to date", markdown)
+        self.assertIn("| one | linux/amd64 | runtime |", markdown)
+        self.assertNotIn("Baseline", markdown)
+        self.assertNotIn("Verification", markdown)
+        self.assertNotIn("Unavailable", markdown)
+        self.assertNotIn("## Input changes", markdown)
+
+        report["status"] = "update-available"
+        report["images"][0]["inputs"].append({"name": "base", "old": "a", "new": "b"})
+        markdown = render_markdown(report)
+        self.assertIn("| base | a | b |", markdown)
+        self.assertNotIn("| release |", markdown)
+
+    def test_build_report_retains_missing_evidence_and_unknown_inputs(self) -> None:
+        markdown = render_markdown({
+            "kind": "build", "repository": "example/repo", "status": "failed",
+            "images": [{
+                "name": "one", "platform": "linux/amd64", "stage": "runtime",
+                "changes": None,
+                "inputs": [{"name": "release", "old": None, "new": None}],
+            }],
+        })
+        self.assertIn("| Baseline | Verification |", markdown)
+        self.assertIn("| Unavailable | Unavailable |", markdown)
+        self.assertIn("| release | Unavailable | Unavailable |", markdown)
+        self.assertIn("Package delta unavailable", markdown)
+
     def test_markdown_renders_machine_statuses_as_human_labels(self) -> None:
         expected = {
             "waiting-for-base": "Waiting for base image",
             "pending-publication": "Publication pending",
             "update-available": "Updates available",
-            "no-changes": "No changes",
+            "no-changes": "Up to date",
             "failed": "Failed",
             "built": "Built",
             "published": "Published",
@@ -434,7 +471,7 @@ class RenderingTests(unittest.TestCase):
     def test_markdown_groups_identical_rows_and_escapes_diagnostics(self) -> None:
         report = {
             "schema": 1,
-            "kind": "update",
+            "kind": "build",
             "repository": "example/repo",
             "status": "update-available",
             "source_sha": "a" * 40,

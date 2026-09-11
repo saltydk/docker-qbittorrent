@@ -709,9 +709,12 @@ def _change_groups(images: Sequence[Mapping[str, object]], key: str) -> tuple[li
 
 
 def render_markdown(report: Mapping[str, object]) -> str:
+    is_update = report.get("kind") == "update"
     kind = str(report.get("kind", "build")).capitalize()
     status = report.get("status")
     status_label = STATUS_LABELS.get(status, status) if isinstance(status, str) else status
+    if is_update and status == "no-changes":
+        status_label = "Up to date"
     lines = [
         f"# {kind} report",
         "",
@@ -731,11 +734,17 @@ def render_markdown(report: Mapping[str, object]) -> str:
                 "",
                 "## Images",
                 "",
-                "| Image | Platform | Stage | Baseline | Verification |",
-                "| --- | --- | --- | --- | --- |",
+                "| Image | Platform | Stage |" if is_update else "| Image | Platform | Stage | Baseline | Verification |",
+                "| --- | --- | --- |" if is_update else "| --- | --- | --- | --- | --- |",
             ]
         )
         for image in images:
+            if is_update:
+                lines.append(
+                    f"| {_markdown(image.get('name'))} | {_markdown(image.get('platform'))} | "
+                    f"{_markdown(image.get('stage'))} |"
+                )
+                continue
             baseline = image.get("baseline")
             baseline_text = "Unavailable"
             if isinstance(baseline, dict):
@@ -775,6 +784,7 @@ def render_markdown(report: Mapping[str, object]) -> str:
         lines.append("Package delta unavailable for: " + ", ".join(unavailable_changes) + ".")
 
     inputs, unavailable_inputs = _change_groups(images, "inputs")
+    inputs = [row for row in inputs if row[2] != row[3] or row[2] in (None, "")]
     if inputs or unavailable_inputs:
         lines.extend(["", "## Input changes", ""])
         if inputs:
