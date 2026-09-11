@@ -654,7 +654,7 @@ def aggregate_reports(
         ) if isinstance(item, dict) else ("", "", ""),
     )
     aggregate["images"] = aggregate_images
-    if source_root is not None and (status != "no-build-required" or aggregate_images or failed):
+    if source_root is not None and (status != "no-build-required" or failed):
         comparisons, source_changed_files = _source_comparisons(
             aggregate_images,
             source_sha,
@@ -714,6 +714,7 @@ def render_markdown(report: Mapping[str, object]) -> str:
     is_update = report.get("kind") == "update"
     kind = str(report.get("kind", "build")).capitalize()
     status = report.get("status")
+    show_build_evidence = not is_update and status != "no-build-required"
     status_label = STATUS_LABELS.get(status, status) if isinstance(status, str) else status
     if is_update and status == "no-changes":
         status_label = "Up to date"
@@ -736,12 +737,12 @@ def render_markdown(report: Mapping[str, object]) -> str:
                 "",
                 "## Images",
                 "",
-                "| Image | Platform | Stage |" if is_update else "| Image | Platform | Stage | Baseline | Verification |",
-                "| --- | --- | --- |" if is_update else "| --- | --- | --- | --- | --- |",
+                "| Image | Platform | Stage |" if not show_build_evidence else "| Image | Platform | Stage | Baseline | Verification |",
+                "| --- | --- | --- |" if not show_build_evidence else "| --- | --- | --- | --- | --- |",
             ]
         )
         for image in images:
-            if is_update:
+            if not show_build_evidence:
                 lines.append(
                     f"| {_markdown(image.get('name'))} | {_markdown(image.get('platform'))} | "
                     f"{_markdown(image.get('stage'))} |"

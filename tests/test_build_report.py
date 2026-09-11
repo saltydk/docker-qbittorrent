@@ -597,6 +597,24 @@ class AggregateTests(unittest.TestCase):
         self.assertNotIn("unavailable", markdown.lower())
         self.assertIn("| candidates | skipped |", markdown)
 
+    def test_no_build_required_with_update_inputs_does_not_compare_image_sources(self) -> None:
+        update = {
+            "kind": "update", "status": "no-changes",
+            "images": [{
+                "name": "base", "platform": "linux/amd64", "stage": "runtime",
+                "changes": [], "inputs": [],
+            }],
+        }
+        with TemporaryDirectory() as directory:
+            report = aggregate_reports(
+                "example/repo", "build", "no-build-required", [update],
+                source_sha="a" * 40, source_root=Path(directory),
+            )
+        self.assertNotIn("source_comparisons", report)
+        markdown = render_markdown(report)
+        self.assertNotIn("Unavailable", markdown)
+        self.assertIn("No package changes", markdown)
+
     def test_expected_build_without_reports_keeps_missing_evidence_visible(self) -> None:
         with TemporaryDirectory() as directory:
             for status in ("built", "failed"):
