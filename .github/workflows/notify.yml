@@ -1,0 +1,39 @@
+name: Notify
+
+on:
+  workflow_run:
+    workflows: [build, version-check]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify:
+    if: >-
+      github.event.workflow_run.event != 'pull_request' &&
+      contains(fromJSON('["success", "failure", "timed_out", "startup_failure", "cancelled"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for a build notification
+        id: details
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ARTIFACT: qbittorrent-notification-${{ github.event.workflow_run.run_attempt }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" > artifacts.json
+          found=$(jq -r --arg name "$ARTIFACT" '[.[].artifacts[]] | any(.name == $name and .expired == false)' artifacts.json)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Notify workflow completion
+        if: >-
+          always() &&
+          (github.event.workflow_run.conclusion != 'success' ||
+           steps.details.outputs.found == 'true' || steps.details.outcome == 'failure')
+        uses: saltyorg/github-actions/notify@cbf157255aff0ff6fc4738b11ee595646455e55a # v1.1.0
+        with:
+          github-token: ${{ github.token }}
+          discord-webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          notification-artifact: qbittorrent-notification-${{ github.event.workflow_run.run_attempt }}

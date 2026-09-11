@@ -373,12 +373,6 @@ jobs:
             published-${{ matrix.variant }}.txt
           if-no-files-found: error
 
-      - name: Notify Discord
-        if: always()
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-
   acceptance:
     if: always()
     needs:
@@ -463,6 +457,20 @@ jobs:
         with:
           name: qbittorrent-build-report-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           path: build-report.json
+          if-no-files-found: error
+
+      - name: Write notification details
+        if: always() && needs.prepare.outputs.has-builds == 'true'
+        env:
+          PUBLISH_MATRIX: ${{ needs.prepare.outputs.publish-matrix }}
+        run: python3 -m scripts.notification
+
+      - name: Upload notification details
+        if: always() && needs.prepare.outputs.has-builds == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbittorrent-notification-${{ github.run_attempt }}
+          path: notification.json
           if-no-files-found: error
 
       - name: Verify required jobs

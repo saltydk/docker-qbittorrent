@@ -96,3 +96,17 @@ refreshes within its selected release line. Its APK helper is shipped in the
 base image at `/usr/local/libexec/apk-lock` and used by this repository. When
 introducing this lock format, publish the base implementation first, then refresh
 qBittorrent's base pin and locks before publishing qBittorrent.
+
+## Build notifications
+
+The `Notify` workflow reports completed `build` and `version-check` runs through
+`saltyorg/github-actions/notify`. Each message includes the build reason and one
+inline field per selected variant with its qBittorrent version, libtorrent
+version, and upstream revision. Only changed values show an arrow. Base-image
+changes link to the old and new source commits.
+
+Build acceptance uploads `qbittorrent-notification-<run attempt>` containing
+`notification.json`. The shared action validates its run ID and attempt before
+using it. Successful checks with no build stay quiet; failed runs still notify
+when details are unavailable. PR checks do not post to Discord. Build triggers
+and scheduled publication recovery are unchanged.
