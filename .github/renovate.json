@@ -63,6 +63,16 @@
         "dependencies",
         "manual-review"
       ]
+    },
+    {
+      "description": "Use published tags for shared workflow actions",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "saltyorg/github-actions"
+      ],
+      "pinDigests": false
     }
   ],
   "customManagers": [
