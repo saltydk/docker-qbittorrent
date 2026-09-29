@@ -63,6 +63,10 @@ class BuildInputError(ValueError):
     """Raised when tracked build inputs violate their required contract."""
 
 
+class UpstreamVersionMismatch(BuildInputError):
+    """The committed release or build revision differs from upstream."""
+
+
 @dataclass(frozen=True)
 class VariantState:
     name: str
@@ -451,24 +455,29 @@ def validate_artifact_inputs(
     states: Mapping[str, VariantState],
     targets: Mapping[str, ArtifactTarget],
 ) -> None:
+    version_mismatches: list[str] = []
     for name, current in states.items():
         target = targets.get(name)
         if target is None:
             raise BuildInputError(f"no upstream artifact target was resolved for {name}")
         if current.revision != target.revision:
-            raise BuildInputError(
+            version_mismatches.append(
                 f"{name} QBITTORRENT_REVISION is {current.revision}; "
                 f"upstream requires {target.revision}"
             )
+            continue
         if current.release != target.release:
-            raise BuildInputError(
+            version_mismatches.append(
                 f"{name} QBITTORRENT_RELEASE is {current.release}; "
                 f"upstream requires {target.release}"
             )
+            continue
         if current.sha256_amd64 != target.sha256_amd64:
             raise BuildInputError(f"{name} amd64 checksum does not match the upstream artifact")
         if current.sha256_arm64 != target.sha256_arm64:
             raise BuildInputError(f"{name} arm64 checksum does not match the upstream artifact")
+    if version_mismatches:
+        raise UpstreamVersionMismatch("; ".join(version_mismatches))
 
 
 def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
@@ -699,10 +708,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     },
                 )
         elif args.command == "verify":
-            provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
-            validate_artifact_inputs(states, provider.referenced_targets(states))
             for _, _, architecture in PLATFORMS:
                 validate_lock(root, "runtime", architecture, states["libtorrent1"].base_image)
+            provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
+            validate_artifact_inputs(states, provider.referenced_targets(states))
             report = {"verified": list(VARIANT_ORDER)}
         else:
             if args.all:
@@ -736,6 +745,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "publish-matrix": json.dumps(matrices["publish"], separators=(",", ":")),
                     },
                 )
+    except UpstreamVersionMismatch as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (BuildInputError, LockError, OSError) as error:
         if args.command == "update":
             from scripts.build_report import write_report

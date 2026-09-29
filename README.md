@@ -78,6 +78,12 @@ verify the tracked release, revision, and architecture checksums against the
 referenced release assets, without requiring the release to remain the latest.
 Failed publication can be retried without producing an empty input commit.
 
+On direct push runs, an upstream release or build-revision mismatch skips image
+builds and publication with a notice. Unit tests and lint still run. The scheduled
+or manually run `version-check` workflow refreshes the inputs separately. PR,
+manual build, and updater-called builds still reject mismatches; checksum,
+package-lock, and upstream request failures remain errors on every trigger.
+
 Update summaries show proposed package versions and image-input changes. Build
 summaries compare the verified candidate inventory with the previous published
 image captured by digest, and report tests, scans, and publication separately.

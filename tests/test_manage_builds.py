@@ -1,10 +1,12 @@
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from io import StringIO
 import json
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from scripts.manage_builds import (
     ArtifactTarget,
@@ -558,6 +560,53 @@ class LockedUpdateTests(unittest.TestCase):
         provider = LiveProvider(Http())
         targets = provider.referenced_targets({"legacy": variant})
         validate_artifact_inputs({"legacy": variant}, targets)
+
+    def test_verify_distinguishes_versions_from_checksum_failures(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        targets = self.provider.artifact_targets()
+        current = targets["libtorrent1"]
+        cases = (
+            ("matching", current, 0),
+            ("revision", replace(current, revision=current.revision + 1), 3),
+            ("release", replace(current, release="release-5.2.5_v1.2.20"), 3),
+            ("amd64 checksum", replace(current, sha256_amd64="a" * 64), 1),
+            ("arm64 checksum", replace(current, sha256_arm64="b" * 64), 1),
+        )
+        for description, target, expected in cases:
+            with self.subTest(description=description), patch("scripts.manage_builds.LiveProvider") as provider:
+                provider.return_value.referenced_targets.return_value = {**targets, "libtorrent1": target}
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    self.assertEqual(main(["--root", str(self.root), "verify"]), expected)
+
+    def test_version_mismatch_does_not_hide_another_variants_checksum_failure(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        targets = self.provider.artifact_targets()
+        targets["libtorrent1"] = replace(targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1)
+        targets["libtorrent2"] = replace(targets["libtorrent2"], sha256_amd64="a" * 64)
+        error = StringIO()
+        with patch("scripts.manage_builds.LiveProvider") as provider:
+            provider.return_value.referenced_targets.return_value = targets
+            with redirect_stdout(StringIO()), redirect_stderr(error):
+                self.assertEqual(main(["--root", str(self.root), "verify"]), 1)
+        self.assertIn("libtorrent2 amd64 checksum", error.getvalue())
+
+    def test_version_mismatch_does_not_hide_invalid_package_locks(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        (self.root / "packages/runtime/requested.txt").write_text("xz\ncurl\n")
+        targets = self.provider.artifact_targets()
+        targets["libtorrent1"] = replace(targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1)
+        with patch("scripts.manage_builds.LiveProvider") as provider:
+            provider.return_value.referenced_targets.return_value = targets
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(["--root", str(self.root), "verify"]), 1)
+            provider.assert_not_called()
+
+    def test_verify_keeps_upstream_request_failures_as_errors(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        with patch("scripts.manage_builds.LiveProvider") as provider:
+            provider.return_value.referenced_targets.side_effect = BuildInputError("failed to fetch: HTTP 503")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(["--root", str(self.root), "verify"]), 1)
 
 
 if __name__ == "__main__":
