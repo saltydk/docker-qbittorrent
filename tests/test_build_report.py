@@ -13,6 +13,7 @@ from scripts.build_report import (
     ReportError,
     aggregate_reports,
     main,
+    render_commit_body,
     render_markdown,
     snapshot_baseline,
     verify_candidate,
@@ -402,6 +403,84 @@ class CandidateTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "failed")
         self.assertIn("x86_64", report["images"][0]["verification"]["error"])
+
+
+class CommitBodyTests(unittest.TestCase):
+    def test_shared_changes_appear_once_without_report_metadata(self) -> None:
+        report = {
+            "kind": "update", "repository": "example/repo", "status": "update-available",
+            "changed_files": ["packages/runtime/x86_64.lock"],
+            "images": [
+                {
+                    "name": name, "platform": platform, "stage": "runtime",
+                    "changes": [{"name": "bind-libs", "old": "9.20.27-r0", "new": "9.20.29-r0"}],
+                    "inputs": [{"name": "release", "old": "v1", "new": "v1"}],
+                }
+                for name in ("one", "two")
+                for platform in ("linux/amd64", "linux/arm64")
+            ],
+        }
+
+        self.assertEqual(
+            render_commit_body(report),
+            "All images:\n- bind-libs: 9.20.27-r0 -> 9.20.29-r0\n",
+        )
+        self.assertIn("| Targets | Package | Previous | Current |", render_markdown(report))
+        self.assertIn("<br>", render_markdown(report))
+
+    def test_changes_retain_their_platform_and_stage_scope(self) -> None:
+        report = {"images": [
+            {
+                "name": "base", "platform": "linux/amd64", "stage": "runtime",
+                "changes": [{"name": "zlib", "old": "1", "new": "2"}],
+                "inputs": [],
+            },
+            {
+                "name": "base", "platform": "linux/amd64", "stage": "builder",
+                "changes": [{"name": "compiler", "old": "3", "new": "4"}],
+                "inputs": [],
+            },
+            {
+                "name": "base", "platform": "linux/arm64", "stage": "runtime",
+                "changes": [], "inputs": [],
+            },
+        ]}
+        body = render_commit_body(report)
+        self.assertIn("base (linux/amd64, runtime):\n- zlib: 1 -> 2", body)
+        self.assertIn("base (linux/amd64, builder):\n- compiler: 3 -> 4", body)
+        self.assertNotIn("linux/arm64", body)
+        self.assertNotIn("All images", body)
+
+    def test_commit_abbreviates_hashes_without_escaping_plain_text_or_changing_report(self) -> None:
+        old = "registry.example/base:sha-" + "a" * 40 + "@sha256:" + "b" * 64
+        new = "registry.example/base:sha-" + "c" * 40 + "@sha256:" + "d" * 64
+        report = {"images": [{
+            "name": "one", "platform": "linux/amd64", "stage": "runtime",
+            "changes": [],
+            "inputs": [{"name": "base image", "old": old, "new": new},
+                       {"name": "plain text", "old": "a&b", "new": "a<b"}],
+        }]}
+
+        body = render_commit_body(report)
+        self.assertIn("registry.example/base:sha-aaaaaaaaaaaa@sha256:bbbbbbbbbbbb", body)
+        self.assertIn("registry.example/base:sha-cccccccccccc@sha256:dddddddddddd", body)
+        self.assertIn("plain text: a&b -> a<b", body)
+        self.assertTrue(all(len(line) <= 72 for line in body.splitlines()))
+        self.assertIn(old, render_markdown(report))
+        self.assertIn(new, render_markdown(report))
+        self.assertNotIn("a" * 40, body)
+
+    def test_added_removed_and_metadata_only_changes(self) -> None:
+        report = {"images": [{
+            "name": "one", "platform": "linux/amd64", "stage": "runtime",
+            "changes": [{"name": "new-package", "old": None, "new": "1"},
+                        {"name": "old-package", "old": "2", "new": None}],
+            "inputs": [],
+        }]}
+        body = render_commit_body(report)
+        self.assertIn("- add new-package 1", body)
+        self.assertIn("- remove old-package 2", body)
+        self.assertEqual(render_commit_body({"changed_files": ["Dockerfile"]}), "")
 
 
 class RenderingTests(unittest.TestCase):

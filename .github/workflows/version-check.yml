@@ -61,8 +61,8 @@ jobs:
             python3 - <<'PY'
           import json
           from pathlib import Path
-          from scripts.build_report import render_markdown
-          print(render_markdown(json.loads(Path('update-report.json').read_text())))
+          from scripts.build_report import render_commit_body
+          print(render_commit_body(json.loads(Path('update-report.json').read_text())), end='')
           PY
           } > "$RUNNER_TEMP/commit-message"
           git commit --cleanup=verbatim --file "$RUNNER_TEMP/commit-message"

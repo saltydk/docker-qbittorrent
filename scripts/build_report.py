@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 from typing import Callable, Mapping, Sequence
 
 try:
@@ -678,15 +679,18 @@ def _markdown(value: object) -> str:
     return escape(str(value).replace("\r", " ").replace("\n", " ")).replace("|", "\\|")
 
 
-def _target(image: Mapping[str, object]) -> str:
-    return f"{_markdown(image.get('name'))} ({_markdown(image.get('platform'))}, {_markdown(image.get('stage'))})"
+def _target(image: Mapping[str, object], formatter: Callable[[object], str] = _markdown) -> str:
+    return f"{formatter(image.get('name'))} ({formatter(image.get('platform'))}, {formatter(image.get('stage'))})"
 
 
-def _change_groups(images: Sequence[Mapping[str, object]], key: str) -> tuple[list[tuple[list[str], object, object, object]], list[str]]:
+def _change_groups(
+    images: Sequence[Mapping[str, object]], key: str,
+    *, formatter: Callable[[object], str] = _markdown,
+) -> tuple[list[tuple[list[str], object, object, object]], list[str]]:
     grouped: dict[tuple[str, str, str], tuple[object, object, object, set[str]]] = {}
     unavailable: list[str] = []
     for image in images:
-        target = _target(image)
+        target = _target(image, formatter)
         rows = image.get(key)
         if rows is None:
             unavailable.append(target)
@@ -708,6 +712,47 @@ def _change_groups(images: Sequence[Mapping[str, object]], key: str) -> tuple[li
     ]
     result.sort(key=lambda row: (_markdown(row[1]), _markdown(row[2]), _markdown(row[3]), row[0]))
     return result, sorted(set(unavailable))
+
+
+def _commit_text(value: object) -> str:
+    if value is None or value == "":
+        return "unavailable"
+    text = " ".join(str(value).split())
+    return re.sub(r"\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b", lambda match: match[0][:12], text)
+
+
+def render_commit_body(report: Mapping[str, object]) -> str:
+    """Summarize changed inputs without copying the Actions report into git history."""
+    images_value = report.get("images", [])
+    images = [image for image in images_value if isinstance(image, dict)] if isinstance(images_value, list) else []
+    all_targets = tuple(sorted({_target(image, _commit_text) for image in images}))
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for key in ("changes", "inputs"):
+        changes, _ = _change_groups(images, key, formatter=_commit_text)
+        for targets, name, old, new in changes:
+            if old == new:
+                continue
+            if key == "changes" and old is None:
+                change = f"add {_commit_text(name)} {_commit_text(new)}"
+            elif key == "changes" and new is None:
+                change = f"remove {_commit_text(name)} {_commit_text(old)}"
+            else:
+                change = f"{_commit_text(name)}: {_commit_text(old)} -> {_commit_text(new)}"
+            groups.setdefault(tuple(targets), []).append(change)
+
+    paragraphs: list[str] = []
+    for targets, changes in sorted(groups.items(), key=lambda group: (group[0] != all_targets, group[0])):
+        label = "All images" if targets == all_targets else "; ".join(targets)
+        lines = [textwrap.fill(label + ":", width=72, break_long_words=False, break_on_hyphens=False)]
+        lines.extend(
+            textwrap.fill(
+                change, width=72, initial_indent="- ", subsequent_indent="  ",
+                break_long_words=False, break_on_hyphens=False,
+            )
+            for change in changes
+        )
+        paragraphs.append("\n".join(lines))
+    return "\n\n".join(paragraphs) + "\n" if paragraphs else ""
 
 
 def render_markdown(report: Mapping[str, object]) -> str:
