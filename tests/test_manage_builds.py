@@ -26,7 +26,7 @@ from scripts.manage_builds import (
     prepare_updates,
     image_inputs_digest,
 )
-from scripts.package_locks import LockError, PackageLock, requests_digest
+from scripts.package_locks import BaseUpdateRequired, LockError, PackageLock, requests_digest
 
 
 BASE_REPOSITORY = "saltydk/alpine-s6overlay"
@@ -509,6 +509,49 @@ class LockedUpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(LockError, "unavailable"):
             prepare_updates(self.root, self.provider, resolver=fail_arm).write()
         self.assertEqual({p: p.read_bytes() for p in original}, original)
+
+    def test_update_reports_base_refresh_required_without_writing_partial_inputs(self):
+        prepare_updates(self.root, self.provider, resolver=self.resolve).write()
+        original = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.version = "5.8.4-r0"
+
+        def resolve_with_base_conflict(root, profile, platform, parent, **kwargs):
+            if platform == "linux/arm64":
+                raise BaseUpdateRequired("base update required: inherited package constraints conflict")
+            return self.resolve(root, profile, platform, parent, **kwargs)
+
+        def prepare(root, provider):
+            return prepare_updates(root, provider, resolver=resolve_with_base_conflict)
+
+        report_path = self.root / "update-report.json"
+        output_path = self.root / "github-output"
+        with patch("scripts.manage_builds.LiveProvider", return_value=self.provider), \
+                patch("scripts.manage_builds.prepare_updates", side_effect=prepare), \
+                redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            result = main(["--root", str(self.root), "update", "--write",
+                           "--report", str(report_path), "--github-output", str(output_path)])
+
+        self.assertEqual(result, 4)
+        self.assertEqual({p: p.read_bytes() for p in original}, original)
+        self.assertEqual(json.loads(report_path.read_text())["status"], "waiting-for-base")
+        outputs = dict(line.split("=", 1) for line in output_path.read_text().splitlines())
+        self.assertEqual(outputs["waiting-for-base"], "true")
+        self.assertEqual(outputs["changed"], "false")
+        self.assertEqual(outputs["rebuild"], "false")
+        self.assertEqual(json.loads(outputs["rebuild-variants"]), [])
+
+    def test_update_does_not_request_base_refresh_for_other_failures(self):
+        for error in (LockError("repository unavailable"), BuildInputError("failed to fetch: HTTP 503")):
+            with self.subTest(error=error):
+                output_path = self.root / "github-output"
+                report_path = self.root / "update-report.json"
+                with patch("scripts.manage_builds.prepare_updates", side_effect=error), \
+                        redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    result = main(["--root", str(self.root), "update", "--write",
+                                   "--report", str(report_path), "--github-output", str(output_path)])
+                self.assertEqual(result, 1)
+                self.assertEqual(json.loads(report_path.read_text())["status"], "failed")
+                self.assertFalse(output_path.exists())
 
     def test_pending_publication_retries_without_an_empty_input_commit(self):
         prepare_updates(self.root, self.provider, resolver=self.resolve).write()

@@ -701,6 +701,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.github_output,
                     {
                         "changed": str(bool(report["changed"])).lower(),
+                        "waiting-for-base": "false",
                         "changed-variants": json.dumps(report["changed"], separators=(",", ":")),
                         "rebuild": str(bool(report["rebuild"])).lower(),
                         "rebuild-variants": json.dumps(report["rebuild"], separators=(",", ":")),
@@ -755,6 +756,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                        "status": "waiting-for-base" if isinstance(error, BaseUpdateRequired) else "failed",
                        "error": str(error), "images": []}
             write_report(failure, json_path=args.report, summary_path=args.summary)
+            if isinstance(error, BaseUpdateRequired):
+                if args.github_output:
+                    _write_github_outputs(args.github_output, {
+                        "waiting-for-base": "true", "changed": "false", "changed-variants": "[]",
+                        "rebuild": "false", "rebuild-variants": "[]",
+                        "report": json.dumps(failure, separators=(",", ":")),
+                    })
+                print(str(error), file=sys.stderr)
+                return 4
         print(str(error), file=sys.stderr)
         return 1
 
