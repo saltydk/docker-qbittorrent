@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: x86_64
-# parent: saltydk/alpine-s6overlay:sha-26f7b604ea146dc2ea1f5d81356cf99c9316453f@sha256:01d618ed6d85910d6d9a41b35dd94739e196439907f408d9a827b85dbebafca9
+# parent: saltydk/alpine-s6overlay:sha-4cdfe649a6b822dcd1253d2a38856626d834b157@sha256:d05065c70181489ad0755ad5d8c3ebfcbceb82dcec564dfc8964c5ae84f735b3
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
