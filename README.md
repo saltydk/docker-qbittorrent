@@ -115,6 +115,14 @@ and blocks fixable HIGH/CRITICAL or CISA KEV findings. Renovate owns GitHub
 Actions and scanner updates; the image updater exclusively owns the base source
 tag and digest.
 
+Scout runs through `.github/actions/scout`, which downloads its binary with the
+job's GitHub token and verifies the published checksum before invoking the
+upstream action. Its `uses: docker/scout-action@...` reference is the sole version
+pin. Renovate updates that reference, and preparation derives both the binary
+release and checksum filename from it. The binary matches the runner's
+architecture, independently of the image being scanned. Failed preparation or
+report generation skips dependent steps without bypassing the security gate.
+
 The base repository's updater owns Alpine image digest and package-lock
 refreshes within its selected release line. Its APK helper is shipped in the
 base image at `/usr/local/libexec/apk-lock` and used by this repository. When

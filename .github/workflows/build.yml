@@ -216,6 +216,7 @@ jobs:
           if-no-files-found: error
 
       - name: Set up Trivy
+        id: trivy-setup
         if: ${{ !cancelled() }}
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
@@ -223,29 +224,31 @@ jobs:
           version: ${{ env.TRIVY_VERSION }}
 
       - name: Generate vulnerability report
-        if: ${{ !cancelled() }}
+        id: trivy-report
+        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --format sarif --output "trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif" \
             "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
 
       - name: Enforce vulnerability policy
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --ignore-unfixed --exit-code 1 \
             "local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}"
 
       - name: Upload vulnerability report
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: ${{ !cancelled() && steps.trivy-report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Generate Docker Scout vulnerability report
+        id: scout-report
         if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-        uses: docker/scout-action@v1.24.0
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
@@ -256,15 +259,15 @@ jobs:
           write-comment: false
 
       - name: Upload Docker Scout vulnerability report
-        if: always() && github.event_name != 'pull_request'
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           category: scout-qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           sarif_file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Enforce actionable Docker Scout findings
-        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-        uses: docker/scout-action@v1.24.0
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
@@ -278,8 +281,8 @@ jobs:
           write-comment: false
 
       - name: Enforce CISA KEV Docker Scout findings
-        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-        uses: docker/scout-action@v1.24.0
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}

@@ -73,6 +73,16 @@
         "saltyorg/github-actions"
       ],
       "pinDigests": false
+    },
+    {
+      "description": "Keep one published Scout action tag for both the action and authenticated binary preparation",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "docker/scout-action"
+      ],
+      "pinDigests": false
     }
   ],
   "customManagers": [

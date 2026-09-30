@@ -60,12 +60,15 @@ jobs:
           "${{ matrix.config_profile }}"
 
       - name: Set up Trivy
+        id: trivy-setup
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
           cache: true
           version: ${{ env.TRIVY_VERSION }}
 
       - name: Generate vulnerability report
+        id: trivy-report
+        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --platform "${{ matrix.platform }}" \
@@ -73,21 +76,23 @@ jobs:
             "${IMAGE}:${{ matrix.variant }}"
 
       - name: Enforce vulnerability policy
+        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
         run: |
           trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
             --platform "${{ matrix.platform }}" \
             --ignore-unfixed --exit-code 1 "${IMAGE}:${{ matrix.variant }}"
 
       - name: Upload vulnerability report
-        if: always()
+        if: ${{ !cancelled() && steps.trivy-report.outcome == 'success' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Generate Docker Scout vulnerability report
+        id: scout-report
         if: ${{ !cancelled() }}
-        uses: docker/scout-action@v1.24.0
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
@@ -98,15 +103,15 @@ jobs:
           write-comment: false
 
       - name: Upload Docker Scout vulnerability report
-        if: always()
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           category: scout-qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
           sarif_file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
 
       - name: Enforce actionable Docker Scout findings
-        if: ${{ !cancelled() }}
-        uses: docker/scout-action@v1.24.0
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
@@ -120,8 +125,8 @@ jobs:
           write-comment: false
 
       - name: Enforce CISA KEV Docker Scout findings
-        if: ${{ !cancelled() }}
-        uses: docker/scout-action@v1.24.0
+        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
+        uses: ./.github/actions/scout
         with:
           command: cves
           image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
