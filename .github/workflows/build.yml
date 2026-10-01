@@ -34,7 +34,8 @@ permissions:
   security-events: write
 
 concurrency:
-  group: qbittorrent-build-${{ github.ref }}
+  # Updater-called builds must not wait on their parent updater's group.
+  group: ${{ inputs.source-sha != '' && format('qbittorrent-called-build-{0}', github.run_id) || format('qbittorrent-build-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

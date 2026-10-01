@@ -14,7 +14,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: qbittorrent-version-check
+  # Keep input commits from superseding an in-progress main push build.
+  group: qbittorrent-build-refs/heads/main
+  queue: max
   cancel-in-progress: false
 
 jobs:
