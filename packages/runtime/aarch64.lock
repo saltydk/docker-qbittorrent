@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: aarch64
-# parent: saltydk/alpine-s6overlay:sha-a74640e1e37acc4bac6a829ed10a1587268bf82e@sha256:fed76bdf988c4d4012d899cd09bd9ea0c349f400345437dbe5d1b4b56fb3d5fc
+# parent: saltydk/alpine-s6overlay:sha-296a4b37c8d8767a1f1a6d99f28715db6a7b1cd3@sha256:cf7dbfa328965d290c0dc2ac564c3b2278530eb731fb8e39f217fbd5b4a1e6db
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
@@ -63,16 +63,16 @@ mpdecimal=4.0.1-r0
 musl=1.2.6-r2
 musl-utils=1.2.6-r2
 ncurses-terminfo-base=6.6_p20260516-r0
-nghttp2-libs=1.69.0-r0
+nghttp2-libs=1.70.0-r0
 oniguruma=6.9.10-r0
 openssl=3.5.9-r0
-pcre2=10.48-r0
+pcre2=10.49-r0
 procps-ng=4.0.6-r0
 protobuf-c=1.5.2-r2
-pyc=3.14.7-r1
-python3=3.14.7-r1
-python3-pyc=3.14.7-r1
-python3-pycache-pyc0=3.14.7-r1
+pyc=3.14.8-r0
+python3=3.14.8-r0
+python3-pyc=3.14.8-r0
+python3-pycache-pyc0=3.14.8-r0
 readline=8.3.3-r1
 scanelf=1.3.9-r1
 sed=4.9-r2
