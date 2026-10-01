@@ -2,11 +2,6 @@ name: version-check
 
 on:
   workflow_dispatch:
-    inputs:
-      refresh-base:
-        description: Request the shared base refresh and defer this image update
-        type: boolean
-        default: false
   schedule:
     - cron: '0 */6 * * *'
 
@@ -21,7 +16,6 @@ concurrency:
 
 jobs:
   update:
-    if: ${{ !inputs.refresh-base }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,6 +50,8 @@ jobs:
             status=$?
             # Exit 4 means the inherited packages require a newer base image.
             [[ "$status" == "4" ]] || exit "$status"
+            echo "::notice::Waiting for the scheduled base refresh. The next scheduled or manual version check will retry."
+            echo "Waiting for the scheduled base refresh. The next scheduled or manual version check will retry." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Verify resolved inputs
@@ -95,26 +91,6 @@ jobs:
           name: qbittorrent-update-report
           path: update-report.json
           if-no-files-found: error
-
-  request-base-refresh:
-    needs: update
-    if: >-
-      always() &&
-      (inputs.refresh-base ||
-       (needs.update.result == 'success' && needs.update.outputs.waiting-for-base == 'true'))
-    runs-on: ubuntu-latest
-    steps:
-      - name: Request base image refresh
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          if [[ -z "$GH_TOKEN" ]]; then
-            echo "::error::GH_TOKEN must have Actions write access to saltydk/docker-alpine-s6overlay to request a base refresh."
-            exit 1
-          fi
-          gh workflow run request-refresh.yml --repo saltydk/docker-alpine-s6overlay --ref master
-          echo "::notice::Shared base refresh requested. The next scheduled or manual image update will retry."
-          echo "Shared base refresh requested. The next scheduled or manual image update will retry." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     if: needs.update.outputs.rebuild == 'true'

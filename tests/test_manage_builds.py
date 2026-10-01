@@ -540,7 +540,7 @@ class LockedUpdateTests(unittest.TestCase):
         self.assertEqual(outputs["rebuild"], "false")
         self.assertEqual(json.loads(outputs["rebuild-variants"]), [])
 
-    def test_update_does_not_request_base_refresh_for_other_failures(self):
+    def test_update_reports_other_resolution_failures_as_errors(self):
         for error in (LockError("repository unavailable"), BuildInputError("failed to fetch: HTTP 503")):
             with self.subTest(error=error):
                 output_path = self.root / "github-output"

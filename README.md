@@ -54,23 +54,17 @@ without upgrading, downgrading, or removing inherited packages. If a dependency
 needs a newer inherited package, update and publish the base first. The updater
 then adopts the verified base and refreshes both architecture locks together.
 
-If a scheduled or manual update encounters that inherited-package conflict, it
-requests `saltydk/docker-alpine-s6overlay`'s shared `request-refresh.yml` workflow
-and finishes successfully once GitHub accepts the request. The coordinator
-reuses a queued or running package refresh, or starts one. The qBittorrent run
-leaves its inputs and published images unchanged. The next scheduled update, every six hours,
-retries against the published base; a manual `version-check` run can retry sooner.
-The requested base refresh must pass its own build and publication checks.
-Selecting `refresh-base` on a manual `version-check` run submits the same request
-directly and defers the qBittorrent update. Autoscan uses the same coordinator.
+If a scheduled or manual update encounters an inherited-package conflict, it
+reports `waiting-for-base` and leaves its inputs and published images unchanged.
+The base refresh and consumer version check both run every six hours. A later
+version check adopts the published base and retries package resolution.
 
-Cross-repository dispatch uses the existing `GH_TOKEN` repository secret, which
-must have Actions write access to `saltydk/docker-alpine-s6overlay`. Missing
-credentials, a rejected coordinator dispatch, and other input-resolution errors
-still fail the update. Failures inside the coordinator or base build remain
-visible in their respective base-repository runs. The local `update` command
-returns exit code 4 for a required base refresh; the workflow handles that result
-and requests the refresh.
+The local `update` command returns exit code 4 for this deferral. The workflow
+handles that result successfully and reports that it is waiting for the scheduled
+base refresh. Other resolution, verification, and publication errors still fail.
+To accelerate a refresh manually, run the base repository's `ci` workflow with
+`refresh-packages` enabled, then run qBittorrent's `version-check` after the base
+publishes successfully.
 
 To refresh inputs in a local checkout with Docker and support for both target
 architectures:

@@ -19,29 +19,21 @@ def run_script(name: str) -> str:
     return textwrap.dedent("\n".join(lines))
 
 
-class BaseRefreshWorkflowTests(unittest.TestCase):
+class VersionCheckDeferralTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.summary = self.root / "summary"
-        self.gh_log = self.root / "gh-arguments"
         self.environment = {
             **os.environ,
             "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
-            "GH_TOKEN": "test-token",
             "GITHUB_OUTPUT": str(self.root / "output"),
             "GITHUB_STEP_SUMMARY": str(self.summary),
-            "FAKE_GH_LOG": str(self.gh_log),
-            "FAKE_GH_EXIT": "0",
         }
-        for name, source in {
-            "python3": '#!/bin/sh\nexit "$FAKE_UPDATE_EXIT"\n',
-            "gh": '#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_GH_LOG"\nexit "$FAKE_GH_EXIT"\n',
-        }.items():
-            path = self.root / name
-            path.write_text(source)
-            path.chmod(0o755)
+        path = self.root / "python3"
+        path.write_text('#!/bin/sh\nexit "$FAKE_UPDATE_EXIT"\n')
+        path.chmod(0o755)
 
     def run_step(self, name: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -56,30 +48,13 @@ class BaseRefreshWorkflowTests(unittest.TestCase):
                 result = self.run_step("Resolve image inputs")
                 self.assertEqual(result.returncode, expected, result.stderr)
 
-    def test_dispatch_requests_package_refresh_on_the_base_default_branch(self) -> None:
-        result = self.run_step("Request base image refresh")
+    def test_waiting_for_base_reports_the_scheduled_retry(self) -> None:
+        self.environment["FAKE_UPDATE_EXIT"] = "4"
+        self.environment.pop("GH_TOKEN", None)
+        result = self.run_step("Resolve image inputs")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.gh_log.read_text().splitlines(), [
-            "workflow", "run", "request-refresh.yml", "--repo", "saltydk/docker-alpine-s6overlay",
-            "--ref", "master",
-        ])
-        self.assertIn("next scheduled or manual image update will retry", self.summary.read_text())
-
-    def test_dispatch_failure_does_not_report_a_queued_refresh(self) -> None:
-        self.environment["FAKE_GH_EXIT"] = "1"
-        result = self.run_step("Request base image refresh")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(self.gh_log.exists())
-        self.assertFalse(self.summary.exists())
-        self.assertNotIn("::notice::", result.stdout)
-
-    def test_missing_cross_repository_token_fails_without_dispatch(self) -> None:
-        self.environment["GH_TOKEN"] = ""
-        result = self.run_step("Request base image refresh")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("GH_TOKEN must have Actions write access", result.stdout)
-        self.assertFalse(self.gh_log.exists())
-        self.assertFalse(self.summary.exists())
+        self.assertIn("Waiting for the scheduled base refresh", result.stdout)
+        self.assertIn("next scheduled or manual version check will retry", self.summary.read_text())
 
 
 if __name__ == "__main__":
