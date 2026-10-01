@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: docker/setup-buildx-action@v4.3.0
       - id: snapshot
-        uses: saltyorg/github-actions/container-snapshot@v1.3.1
+        uses: saltyorg/github-actions/container-snapshot@v1.3.2
         with:
           targets: '[{"name":"libtorrent1","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent1","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent2","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"libtorrent2","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"legacy","platform":"linux/amd64","image":"saltydk/qbittorrent:legacy"},{"name":"legacy","platform":"linux/arm64","image":"saltydk/qbittorrent:legacy"}]'
       - uses: actions/upload-artifact@v7
@@ -54,7 +54,7 @@ jobs:
         run: python3 scripts/test-published-image.py
       - name: Scan published image
         if: ${{ !cancelled() }}
-        uses: saltyorg/github-actions/container-scan@v1.3.1
+        uses: saltyorg/github-actions/container-scan@v1.3.2
         with:
           image: ${{ matrix.image }}
           name: ${{ matrix.name }}
@@ -64,11 +64,11 @@ jobs:
           dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Upload published Scout report to Code Scanning
-        if: ${{ !cancelled() && hashFiles(format('security/{0}-{1}/scout.sarif', matrix.name, matrix.slug)) != '' }}
+        if: ${{ !cancelled() && hashFiles(format('security/{0}-{1}/scout-code-scanning.sarif', matrix.name, matrix.slug)) != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           category: scout-docker-qbittorrent-${{ matrix.name }}-${{ matrix.slug }}
-          sarif_file: security/${{ matrix.name }}-${{ matrix.slug }}/scout.sarif
+          sarif_file: security/${{ matrix.name }}-${{ matrix.slug }}/scout-code-scanning.sarif
       - name: Retain complete or incomplete scan evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -99,7 +99,7 @@ jobs:
           path: security-reports
           merge-multiple: false
       - name: Report current published vulnerabilities
-        uses: saltyorg/github-actions/container-report@v1.3.1
+        uses: saltyorg/github-actions/container-report@v1.3.2
         with:
           reports-directory: security-reports
           expected-targets: snapshot/expected-targets.json

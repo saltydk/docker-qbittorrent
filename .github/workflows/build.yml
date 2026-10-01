@@ -212,7 +212,7 @@ jobs:
       - name: Scan candidate with shared container tooling
         id: security
         if: ${{ !cancelled() }}
-        uses: saltyorg/github-actions/container-scan@v1.3.1
+        uses: saltyorg/github-actions/container-scan@v1.3.2
         with:
           image: local/qbittorrent:${{ matrix.variant }}-${{ matrix.platform_slug }}-${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           name: ${{ matrix.variant }}
