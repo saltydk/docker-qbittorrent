@@ -465,4 +465,6 @@ jobs:
       security-events: write
       issues: write
     uses: ./.github/workflows/security-scan.yml
+    with:
+      source-sha: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
     secrets: inherit

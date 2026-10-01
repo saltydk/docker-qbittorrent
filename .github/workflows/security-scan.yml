@@ -3,6 +3,10 @@ name: Published image security
 on:
   workflow_call:
     inputs:
+      source-sha:
+        description: Exact source whose recipes define published runtime acceptance
+        type: string
+        default: ''
       artifact-prefix:
         description: Unique artifact prefix for this invocation
         type: string
@@ -45,6 +49,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: docker/setup-qemu-action@v4.3.0
       - name: Test published runtime
         env:
