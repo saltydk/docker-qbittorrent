@@ -73,29 +73,6 @@
         "saltyorg/github-actions"
       ],
       "pinDigests": false
-    },
-    {
-      "description": "Keep one published Scout action tag for both the action and authenticated binary preparation",
-      "matchManagers": [
-        "github-actions"
-      ],
-      "matchPackageNames": [
-        "docker/scout-action"
-      ],
-      "pinDigests": false
-    }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Pinned Trivy scanner version",
-      "managerFilePatterns": [
-        "/(^|/)\\.github/workflows/.+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+TRIVY_VERSION:\\s+(?<currentValue>\\S+)"
-      ],
-      "versioningTemplate": "semver-coerced"
     }
   ]
 }

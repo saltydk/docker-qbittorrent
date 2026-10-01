@@ -109,25 +109,17 @@ Complete JSON reports are retained as workflow artifacts. Images include their
 runtime lock at `/usr/share/image-inputs/runtime.lock`; the image labels record
 the package-lock aggregate hash and the variant's input hash.
 Builds boot each variant, authenticate to its Web API, validate its version and
-libtorrent line, and scan the resulting image before publishing. Trivy applies
-the Alpine vendor advisory policy; Docker Scout reports broader advisory data
-and blocks fixable HIGH/CRITICAL or CISA KEV findings. Renovate owns GitHub
-Actions and scanner updates; the image updater exclusively owns the base source
-tag and digest.
+libtorrent line, and scan the resulting image before publishing. The shared container security actions report ordinary CVEs
+without blocking
+publication, while CISA KEV findings remain blocking. Runtime acceptance and
+package-lock verification stay required. Scanner downloads and network calls
+retry useful transient failures inside Python.
 
-Scout runs through `.github/actions/scout`, which downloads its binary with the
-job's GitHub token and verifies the published checksum before invoking the
-upstream action. Its `uses: docker/scout-action@...` reference is the sole version
-pin. Renovate updates that reference, and preparation derives both the binary
-release and checksum filename from it. The binary matches the runner's
-architecture, independently of the image being scanned. Failed preparation or
-report generation skips dependent steps without bypassing the security gate.
-
-The base repository's updater owns Alpine image digest and package-lock
-refreshes within its selected release line. Its APK helper is shipped in the
-base image at `/usr/local/libexec/apk-lock` and used by this repository. When
-introducing this lock format, publish the base implementation first, then refresh
-qBittorrent's base pin and locks before publishing qBittorrent.
+Scheduled scans and scans after publication assess all three published variants
+on amd64 and arm64. They retain raw reports and reconcile CVE issues only against
+complete, current published-image coverage. Missing assessments preserve issues;
+manual closures are respected. The reporting workflow is separate from candidate
+publication, and its scope is serialized with publication.
 
 ## Build notifications
 

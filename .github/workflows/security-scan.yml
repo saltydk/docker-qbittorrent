@@ -1,6 +1,12 @@
-name: security-scan
+name: Published image security
 
 on:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        description: Unique artifact prefix for this invocation
+        type: string
+        default: published
   workflow_dispatch:
   schedule:
     - cron: '37 2 * * *'
@@ -9,30 +15,27 @@ permissions:
   contents: read
   security-events: write
 
-env:
-  IMAGE: saltydk/qbittorrent
-  # renovate: datasource=github-releases depName=aquasecurity/trivy
-  TRIVY_VERSION: v0.74.0
+concurrency:
+  group: docker-qbittorrent-publication
+  queue: max
+  cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.matrix.outputs.candidate-matrix }}
+      matrix: ${{ steps.snapshot.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.3.0
+      - id: snapshot
+        uses: saltyorg/github-actions/container-snapshot@v1.3.1
         with:
-          ref: ${{ github.sha }}
-
-      - name: Prime Trivy binary cache
-        uses: aquasecurity/setup-trivy@v0.3.1
+          targets: '[{"name":"libtorrent1","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent1","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent2","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"libtorrent2","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"legacy","platform":"linux/amd64","image":"saltydk/qbittorrent:legacy"},{"name":"legacy","platform":"linux/arm64","image":"saltydk/qbittorrent:legacy"}]'
+      - uses: actions/upload-artifact@v7
         with:
-          cache: true
-          version: ${{ env.TRIVY_VERSION }}
-
-      - name: Build scan matrix
-        id: matrix
-        run: python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
+          name: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-snapshot
+          path: ${{ steps.snapshot.outputs.expected-targets }}
+          if-no-files-found: error
 
   scan:
     needs: prepare
@@ -42,113 +45,70 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4.3.0
-
-      - name: Test published image
-        run: >-
-          scripts/test-image.sh
-          "${IMAGE}:${{ matrix.variant }}"
-          "${{ matrix.platform }}"
-          "${{ matrix.architecture }}"
-          "${{ matrix.variant }}"
-          "${{ matrix.qbittorrent_version }}"
-          "${{ matrix.libtorrent_prefix }}"
-          "${{ matrix.config_profile }}"
-
-      - name: Set up Trivy
-        id: trivy-setup
-        uses: aquasecurity/setup-trivy@v0.3.1
-        with:
-          cache: true
-          version: ${{ env.TRIVY_VERSION }}
-
-      - name: Generate vulnerability report
-        id: trivy-report
-        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
-        run: |
-          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
-            --platform "${{ matrix.platform }}" \
-            --format sarif --output "trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif" \
-            "${IMAGE}:${{ matrix.variant }}"
-
-      - name: Enforce vulnerability policy
-        if: ${{ !cancelled() && steps.trivy-setup.outcome == 'success' }}
-        run: |
-          trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
-            --platform "${{ matrix.platform }}" \
-            --ignore-unfixed --exit-code 1 "${IMAGE}:${{ matrix.variant }}"
-
-      - name: Upload vulnerability report
-        if: ${{ !cancelled() && steps.trivy-report.outcome == 'success' }}
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          category: qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
-          sarif_file: trivy-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
-
-      - name: Generate Docker Scout vulnerability report
-        id: scout-report
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/scout
-        with:
-          command: cves
-          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
-          platform: ${{ matrix.platform }}
-          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
-          sarif-file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
-          write-comment: false
-
-      - name: Upload Docker Scout vulnerability report
-        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          category: scout-qbittorrent-${{ matrix.variant }}-${{ matrix.platform_slug }}
-          sarif_file: scout-${{ matrix.variant }}-${{ matrix.platform_slug }}.sarif
-
-      - name: Enforce actionable Docker Scout findings
-        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
-        uses: ./.github/actions/scout
-        with:
-          command: cves
-          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
-          platform: ${{ matrix.platform }}
-          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
-          only-fixed: true
-          only-severities: critical,high
-          exit-code: true
-          summary: false
-          write-comment: false
-
-      - name: Enforce CISA KEV Docker Scout findings
-        if: ${{ !cancelled() && steps.scout-report.outcome == 'success' }}
-        uses: ./.github/actions/scout
-        with:
-          command: cves
-          image: registry://${{ env.IMAGE }}:${{ matrix.variant }}
-          platform: ${{ matrix.platform }}
-          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
-          only-cisa-kev: true
-          exit-code: true
-          summary: false
-          write-comment: false
-
-  security:
-    if: always()
-    needs:
-      - prepare
-      - scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verify scan jobs
+      - uses: docker/setup-qemu-action@v4.3.0
+      - name: Test published runtime
         env:
-          PREPARE_RESULT: ${{ needs.prepare.result }}
-          SCAN_RESULT: ${{ needs.scan.result }}
-        run: |
-          [[ "$PREPARE_RESULT" == "success" ]]
-          [[ "$SCAN_RESULT" == "success" ]]
+          IMAGE: ${{ matrix.image }}
+          VARIANT: ${{ matrix.name }}
+          PLATFORM: ${{ matrix.platform }}
+        run: python3 scripts/test-published-image.py
+      - name: Scan published image
+        if: ${{ !cancelled() }}
+        uses: saltyorg/github-actions/container-scan@v1.3.1
+        with:
+          image: ${{ matrix.image }}
+          name: ${{ matrix.name }}
+          platform: ${{ matrix.platform }}
+          kind: published
+          output-directory: security/${{ matrix.name }}-${{ matrix.slug }}
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Upload published Scout report to Code Scanning
+        if: ${{ !cancelled() && hashFiles(format('security/{0}-{1}/scout.sarif', matrix.name, matrix.slug)) != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          category: scout-docker-qbittorrent-${{ matrix.name }}-${{ matrix.slug }}
+          sarif_file: security/${{ matrix.name }}-${{ matrix.slug }}/scout.sarif
+      - name: Retain complete or incomplete scan evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-published-${{ matrix.name }}-${{ matrix.slug }}
+          path: security/${{ matrix.name }}-${{ matrix.slug }}
+          if-no-files-found: warn
+
+  report:
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    needs: [prepare, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      security-events: write
+    steps:
+      - uses: docker/setup-buildx-action@v4.3.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-snapshot
+          path: snapshot
+      - name: Download per-target reports
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-published-*
+          path: security-reports
+          merge-multiple: false
+      - name: Report current published vulnerabilities
+        uses: saltyorg/github-actions/container-report@v1.3.1
+        with:
+          reports-directory: security-reports
+          expected-targets: snapshot/expected-targets.json
+          scope: published-images
+          dry-run: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+      - name: Retain aggregate reporting outcomes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-report
+          path: container-security-report.json
+          if-no-files-found: warn
