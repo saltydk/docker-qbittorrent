@@ -80,7 +80,7 @@ jobs:
           PY
           } > "$RUNNER_TEMP/commit-message"
           git commit --cleanup=verbatim --file "$RUNNER_TEMP/commit-message"
-          git push origin HEAD:main
+          python3 scripts/push_inputs.py
 
       - name: Select committed source
         id: source
