@@ -60,19 +60,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           CALLED_SOURCE_SHA: ${{ inputs.source-sha }}
-        run: |
-          if python3 scripts/manage_builds.py verify; then
-            echo "skip-build=false" >> "$GITHUB_OUTPUT"
-          else
-            status=$?
-            if [[ "$status" == "3" && "$EVENT_NAME" == "push" && -z "$CALLED_SOURCE_SHA" ]]; then
-              echo "skip-build=true" >> "$GITHUB_OUTPUT"
-              echo "::notice::Skipping image build and publication because the upstream release or build revision changed."
-              echo "Image build and publication skipped because the upstream release or build revision changed. The scheduled or manually run version-check workflow can refresh the inputs." >> "$GITHUB_STEP_SUMMARY"
-            else
-              exit "$status"
-            fi
-          fi
+        run: >-
+          python3 -m scripts.build_workflow verify
+          --event-name "$EVENT_NAME"
+          --called-source-sha "$CALLED_SOURCE_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Check shell scripts
         run: |
@@ -108,25 +101,22 @@ jobs:
           HEAD_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
           CALLED_SOURCE_SHA: ${{ inputs.source-sha }}
           SELECTED_VARIANTS: ${{ inputs.variants }}
-        run: |
-          if [[ -n "$CALLED_SOURCE_SHA" && -n "$SELECTED_VARIANTS" ]]; then
-            python3 scripts/manage_builds.py matrix --variants "$SELECTED_VARIANTS" --github-output "$GITHUB_OUTPUT"
-          elif [[ -n "$CALLED_SOURCE_SHA" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            python3 scripts/manage_builds.py matrix --all --github-output "$GITHUB_OUTPUT"
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            python3 scripts/manage_builds.py matrix --before "$BASE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
-          else
-            python3 scripts/manage_builds.py matrix --before "$BEFORE_SHA" --after "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
-          fi
+        run: >-
+          python3 -m scripts.build_workflow matrix
+          --event-name "$EVENT_NAME"
+          --before-sha "$BEFORE_SHA"
+          --base-sha "$BASE_SHA"
+          --head-sha "$HEAD_SHA"
+          --called-source-sha "$CALLED_SOURCE_SHA"
+          --selected-variants-json "$SELECTED_VARIANTS"
+          --github-output "$GITHUB_OUTPUT"
 
       - name: Compute lock-set digest
         id: locks
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          from pathlib import Path
-          from scripts.package_locks import locks_digest
-          print(f"locks-sha={locks_digest(Path('.'))}")
-          PY
+        run: >-
+          python3 -m scripts.build_workflow locks
+          --source-root .
+          --github-output "$GITHUB_OUTPUT"
 
   test-candidate:
     needs:
@@ -253,6 +243,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
+          fetch-depth: 0
           ref: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up QEMU
@@ -276,20 +267,24 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Reject superseded publication
+      - name: Select publication from current registry revisions
         id: source-guard
         env:
           SOURCE_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
-        run: |
-          default_sha=$(git ls-remote --exit-code origin refs/heads/main | awk 'NR == 1 {print $1}')
-          [[ "$default_sha" =~ ^[0-9a-f]{40}$ ]]
-          if [[ "$SOURCE_SHA" != "$default_sha" ]]; then
-            echo "Refusing to publish superseded source $SOURCE_SHA; current main is $default_sha." >&2
-            exit 1
-          fi
+          SOURCE_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUBLICATION_TAGS: ${{ toJSON(matrix.tags) }}
+        run: >-
+          python3 -m scripts.publication_guard
+          --source-sha "$SOURCE_SHA"
+          --source-ref "$SOURCE_REF"
+          --default-branch "$DEFAULT_BRANCH"
+          --tags-json "$PUBLICATION_TAGS"
+          --github-output "$GITHUB_OUTPUT"
 
       - name: Publish image
         id: docker-build
+        if: steps.source-guard.outputs.eligible == 'true'
         uses: docker/build-push-action@v7.3.0
         with:
           context: .
@@ -310,22 +305,36 @@ jobs:
 
       - name: Record published tags
         id: record
+        if: steps.source-guard.outputs.eligible == 'true'
         env:
           PUBLISHED_DIGEST: ${{ steps.docker-build.outputs.digest }}
           TAGS: ${{ toJSON(matrix.tags) }}
-        run: |
-          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          jq -r --arg digest "$PUBLISHED_DIGEST" '.[] + "@" + $digest' <<< "$TAGS" \
-            > "published-${{ matrix.variant }}.txt"
+          VARIANT: ${{ matrix.variant }}
+        run: >-
+          python3 -m scripts.publication record
+          --variant "$VARIANT"
+          --digest "$PUBLISHED_DIGEST"
+          --tags-json "$TAGS"
 
       - name: Capture publication outcomes
         if: always()
-        run: |
-          {
-            echo "${{ matrix.variant }}-source-guard=${{ steps.source-guard.outcome }}"
-            echo "${{ matrix.variant }}-build=${{ steps.docker-build.outcome }}"
-            echo "${{ matrix.variant }}-record=${{ steps.record.outcome }}"
-          } > "publication-${{ matrix.variant }}-outcomes.txt"
+        env:
+          VARIANT: ${{ matrix.variant }}
+          SOURCE_GUARD_RESULT: ${{ steps.source-guard.outcome }}
+          ELIGIBLE: ${{ steps.source-guard.outputs.eligible }}
+          BUILD_RESULT: ${{ steps.docker-build.outcome }}
+          PUBLISHED_DIGEST: ${{ steps.docker-build.outputs.digest }}
+          TAGS: ${{ toJSON(matrix.tags) }}
+          RECORD_RESULT: ${{ steps.record.outcome }}
+        run: >-
+          python3 -m scripts.publication outcomes
+          --variant "$VARIANT"
+          --source-guard "$SOURCE_GUARD_RESULT"
+          --eligible "$ELIGIBLE"
+          --build-result "$BUILD_RESULT"
+          --digest "$PUBLISHED_DIGEST"
+          --tags-json "$TAGS"
+          --record-result "$RECORD_RESULT"
 
       - name: Upload published tags
         if: always()
@@ -338,6 +347,10 @@ jobs:
           if-no-files-found: error
 
   acceptance:
+    outputs:
+      has-publications: ${{ steps.report.outputs.has-publications }}
+      published-variants: ${{ steps.report.outputs.published-variants }}
+      published-images: ${{ steps.report.outputs.published-images }}
     if: >-
       always() &&
       (needs.static.outputs.skip-build != 'true' ||
@@ -381,6 +394,7 @@ jobs:
           merge-multiple: true
 
       - name: Write grouped build report
+        id: report
         env:
           STATIC_RESULT: ${{ needs.static.result }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
@@ -389,34 +403,21 @@ jobs:
           HAS_BUILDS: ${{ needs.prepare.outputs.has-builds }}
           SHOULD_PUBLISH: ${{ (inputs.source-sha != '' && inputs.publish) || (inputs.source-sha == '' && github.event_name != 'pull_request') }}
           SOURCE_SHA: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
-        run: |
-          mkdir -p candidate-reports update-reports published-tags
-          status=failed
-          if [[ "$HAS_BUILDS" == "false" && "$STATIC_RESULT" == "success" && "$PREPARE_RESULT" == "success" ]]; then
-            status=no-build-required
-          elif [[ "$TEST_RESULT" == "success" ]]; then
-            if [[ "$SHOULD_PUBLISH" == "true" ]]; then
-              if [[ "$PUBLISH_RESULT" == "success" ]]; then
-                status=published
-              fi
-            else
-              status=built
-            fi
-          fi
-          args=(--repository "$GITHUB_REPOSITORY" --kind build --status "$status" --source-sha "$SOURCE_SHA"
-            --outcome "static=$STATIC_RESULT" --outcome "prepare=$PREPARE_RESULT"
-            --outcome "candidates=$TEST_RESULT" --outcome "publish=$PUBLISH_RESULT"
-            --source-root . --output build-report.json --summary "$GITHUB_STEP_SUMMARY")
-          while IFS= read -r report; do
-            args+=(--image-report "$report")
-          done < <(find candidate-reports update-reports -type f -name '*.json' -print 2>/dev/null | sort)
-          while IFS= read -r published; do
-            args+=(--published "$published")
-          done < <(find published-tags -type f -name 'published-*.txt' -exec cat {} + 2>/dev/null | sort -u)
-          while IFS='=' read -r key value; do
-            [[ -n "$key" ]] && args+=(--outcome "publication-${key}=${value:-unknown}")
-          done < <(find published-tags -type f -name 'publication-*-outcomes.txt' -exec cat {} + 2>/dev/null)
-          python3 scripts/build_report.py aggregate "${args[@]}"
+          PUBLISH_MATRIX: ${{ needs.prepare.outputs.publish-matrix }}
+        run: >-
+          python3 -m scripts.publication report
+          --repository "$GITHUB_REPOSITORY"
+          --source-sha "$SOURCE_SHA"
+          --static-result "$STATIC_RESULT"
+          --prepare-result "$PREPARE_RESULT"
+          --test-result "$TEST_RESULT"
+          --publish-result "$PUBLISH_RESULT"
+          --has-builds "$HAS_BUILDS"
+          --should-publish "$SHOULD_PUBLISH"
+          --publish-matrix-json "$PUBLISH_MATRIX"
+          --github-output "$GITHUB_OUTPUT"
+          --summary "$GITHUB_STEP_SUMMARY"
+          --output build-report.json
 
       - name: Upload grouped build report
         if: always()
@@ -427,13 +428,19 @@ jobs:
           if-no-files-found: error
 
       - name: Write notification details
-        if: always() && needs.prepare.outputs.has-builds == 'true'
+        if: always() && needs.prepare.outputs.has-builds == 'true' && (needs.publish.result != 'success' || steps.report.outputs.has-publications == 'true')
         env:
           PUBLISH_MATRIX: ${{ needs.prepare.outputs.publish-matrix }}
-        run: python3 -m scripts.notification
+          PUBLISHED_VARIANTS: ${{ steps.report.outputs.published-variants }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        run: >-
+          python3 -m scripts.notification
+          --publish-matrix-json "$PUBLISH_MATRIX"
+          --published-variants-json "$PUBLISHED_VARIANTS"
+          --publish-result "$PUBLISH_RESULT"
 
       - name: Upload notification details
-        if: always() && needs.prepare.outputs.has-builds == 'true'
+        if: always() && needs.prepare.outputs.has-builds == 'true' && (needs.publish.result != 'success' || steps.report.outputs.has-publications == 'true')
         uses: actions/upload-artifact@v7
         with:
           name: qbittorrent-notification-${{ github.run_attempt }}
@@ -448,19 +455,20 @@ jobs:
           TEST_RESULT: ${{ needs.test-candidate.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           SHOULD_PUBLISH: ${{ (inputs.source-sha != '' && inputs.publish) || (inputs.source-sha == '' && github.event_name != 'pull_request') }}
-        run: |
-          [[ "$STATIC_RESULT" == "success" ]]
-          [[ "$PREPARE_RESULT" == "success" ]]
-          if [[ "$HAS_BUILDS" == "true" ]]; then
-            [[ "$TEST_RESULT" == "success" ]]
-            if [[ "$SHOULD_PUBLISH" == "true" ]]; then
-              [[ "$PUBLISH_RESULT" == "success" ]]
-            fi
-          fi
+        run: >-
+          python3 -m scripts.build_workflow requirements
+          --static-result "$STATIC_RESULT"
+          --prepare-result "$PREPARE_RESULT"
+          --has-builds "$HAS_BUILDS"
+          --test-result "$TEST_RESULT"
+          --publish-result "$PUBLISH_RESULT"
+          --should-publish "$SHOULD_PUBLISH"
 
   published-security:
-    needs: publish
-    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    needs:
+      - publish
+      - acceptance
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.acceptance.outputs.has-publications == 'true' }}
     permissions:
       contents: read
       security-events: write
@@ -468,4 +476,5 @@ jobs:
     uses: ./.github/workflows/security-scan.yml
     with:
       source-sha: ${{ inputs.source-sha || github.event.pull_request.head.sha || github.sha }}
+      published-images: ${{ needs.acceptance.outputs.published-images }}
     secrets: inherit

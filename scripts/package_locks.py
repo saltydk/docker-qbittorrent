@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
-import subprocess
+import shutil
+
+# Docker argv uses no host shell and operates on disposable containers.
+import subprocess  # nosec B404
 import tempfile
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
-
-ARCHITECTURES = {"linux/amd64": "x86_64", "linux/arm64": "aarch64", "linux/arm/v7": "armv7"}
+ARCHITECTURES = {
+    "linux/amd64": "x86_64",
+    "linux/arm64": "aarch64",
+    "linux/arm/v7": "armv7",
+}
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9+_.-]*\Z")
 VERSION = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9+_.:~\-]*\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PARENT = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
+# This is a read-only bind mount target inside the disposable container.
+CONTAINER_REQUESTS_PATH = "/tmp/apk-requests.txt"  # nosec B108
 
 
 class LockError(RuntimeError):
@@ -56,10 +64,14 @@ class PackageLock:
             raise LockError("lock parent must be an image pinned by SHA-256 digest")
         if not SHA256.fullmatch(self.requests_sha256):
             raise LockError("invalid request-list SHA-256")
-        body = "".join(f"{name}={version}\n" for name, version in sorted(self.packages.items()))
+        body = "".join(
+            f"{name}={version}\n" for name, version in sorted(self.packages.items())
+        )
         inventory(body)
-        return (f"# apk-lock: 1\n# architecture: {self.architecture}\n"
-                f"# parent: {self.parent}\n# requests-sha256: {self.requests_sha256}\n{body}")
+        return (
+            f"# apk-lock: 1\n# architecture: {self.architecture}\n"
+            f"# parent: {self.parent}\n# requests-sha256: {self.requests_sha256}\n{body}"
+        )
 
     @property
     def digest(self) -> str:
@@ -81,8 +93,12 @@ def parse_lock(text: str) -> PackageLock:
         raise LockError("unsupported APK lock format")
     if set(headers) != {"apk-lock", "architecture", "parent", "requests-sha256"}:
         raise LockError("missing or unknown lock metadata")
-    lock = PackageLock(headers["architecture"], headers["parent"],
-                       headers["requests-sha256"], inventory("\n".join(body)))
+    lock = PackageLock(
+        headers["architecture"],
+        headers["parent"],
+        headers["requests-sha256"],
+        inventory("\n".join(body)),
+    )
     if lock.render() != text:
         raise LockError("lock is not canonical; regenerate package locks")
     return lock
@@ -95,7 +111,9 @@ def read_requests(path: Path) -> tuple[str, ...]:
         if not name:
             continue
         if not NAME.fullmatch(name):
-            raise LockError(f"{path}: expected an unversioned package name, got {name!r}")
+            raise LockError(
+                f"{path}: expected an unversioned package name, got {name!r}"
+            )
         names.add(name)
     if not names:
         raise LockError(f"{path}: package requests are empty")
@@ -108,28 +126,55 @@ def requests_digest(requests: Sequence[str]) -> str:
 
 
 def lock_path(root: Path, profile: str, architecture: str) -> Path:
-    if profile not in {"builder", "runtime"} or architecture not in ARCHITECTURES.values():
-        raise LockError(f"unsupported lock profile/architecture: {profile}/{architecture}")
+    if (
+        profile not in {"builder", "runtime"}
+        or architecture not in ARCHITECTURES.values()
+    ):
+        raise LockError(
+            f"unsupported lock profile/architecture: {profile}/{architecture}"
+        )
     return root / "packages" / profile / f"{architecture}.lock"
 
 
-def validate_lock(root: Path, profile: str, architecture: str, parent: str) -> PackageLock:
+def validate_lock(
+    root: Path, profile: str, architecture: str, parent: str
+) -> PackageLock:
     path = lock_path(root, profile, architecture)
     lock = parse_lock(path.read_text(encoding="utf-8"))
     expected_requests = requests_digest(read_requests(path.parent / "requested.txt"))
-    if lock.architecture != architecture or lock.parent != parent or lock.requests_sha256 != expected_requests:
-        raise LockError(f"{path}: stale lock metadata; regenerate locks for the requested packages and parent image")
+    if (
+        lock.architecture != architecture
+        or lock.parent != parent
+        or lock.requests_sha256 != expected_requests
+    ):
+        raise LockError(
+            f"{path}: stale lock metadata; regenerate locks for the requested packages and parent image"
+        )
     return lock
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    if not command or command[0] != "docker":
+        raise LockError("package resolution requires Docker")
+    executable = shutil.which("docker")
+    if executable is None:
+        raise LockError("required Docker executable is unavailable")
+    # Callers validate platforms/pinned images; resolved Docker runs without a shell.
+    return subprocess.run(  # nosec B603
+        [executable, *command[1:]],
+        check=False,
+        shell=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def platform_image_reference(parent: str, platform: str, *, runner=run) -> str:
     """Use a child manifest so classic Docker stores can hold each architecture."""
     if platform not in ARCHITECTURES or not PARENT.fullmatch(parent):
-        raise LockError("platform selection requires a supported platform and digest-pinned parent")
+        raise LockError(
+            "platform selection requires a supported platform and digest-pinned parent"
+        )
     completed = runner(["docker", "buildx", "imagetools", "inspect", parent, "--raw"])
     if completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
@@ -142,8 +187,11 @@ def platform_image_reference(parent: str, platform: str, *, runner=run) -> str:
         raise LockError(f"invalid parent manifest for {platform}")
     descriptors = manifest.get("manifests")
     if not isinstance(descriptors, list):
-        if (manifest.get("schemaVersion") == 2 and isinstance(manifest.get("config"), dict)
-                and isinstance(manifest.get("layers"), list)):
+        if (
+            manifest.get("schemaVersion") == 2
+            and isinstance(manifest.get("config"), dict)
+            and isinstance(manifest.get("layers"), list)
+        ):
             return parent
         raise LockError(f"parent manifest has no image or platform list for {platform}")
     operating_system, architecture, *variant = platform.split("/")
@@ -155,67 +203,131 @@ def platform_image_reference(parent: str, platform: str, *, runner=run) -> str:
         variants = {"", "v1"}
     matches = []
     for descriptor in descriptors:
-        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("platform"), dict):
+        if not isinstance(descriptor, dict) or not isinstance(
+            descriptor.get("platform"), dict
+        ):
             continue
         metadata = descriptor["platform"]
-        if (metadata.get("os") == operating_system and metadata.get("architecture") == architecture
-                and isinstance(metadata.get("variant", ""), str) and metadata.get("variant", "") in variants):
+        if (
+            metadata.get("os") == operating_system
+            and metadata.get("architecture") == architecture
+            and isinstance(metadata.get("variant", ""), str)
+            and metadata.get("variant", "") in variants
+        ):
             matches.append(descriptor.get("digest"))
     if len(matches) != 1:
-        raise LockError(f"parent manifest must contain exactly one image for {platform}")
+        raise LockError(
+            f"parent manifest must contain exactly one image for {platform}"
+        )
     digest = matches[0]
-    if not isinstance(digest, str) or not digest.startswith("sha256:") or not SHA256.fullmatch(digest[7:]):
+    if (
+        not isinstance(digest, str)
+        or not digest.startswith("sha256:")
+        or not SHA256.fullmatch(digest[7:])
+    ):
         raise LockError(f"parent manifest has an invalid image digest for {platform}")
     return parent.partition("@")[0] + "@" + digest
 
 
-def resolve_lock(root: Path, profile: str, platform: str, parent: str, *,
-                 inherited: bool = False, helper: Path | None = None, runner=run) -> PackageLock:
+def resolve_lock(
+    root: Path,
+    profile: str,
+    platform: str,
+    parent: str,
+    *,
+    inherited: bool = False,
+    helper: Path | None = None,
+    runner=run,
+) -> PackageLock:
     if platform not in ARCHITECTURES:
         raise LockError(f"unsupported platform: {platform}")
     if not PARENT.fullmatch(parent):
-        raise LockError("package resolution requires a parent image pinned by SHA-256 digest")
+        raise LockError(
+            "package resolution requires a parent image pinned by SHA-256 digest"
+        )
     requests_path = (root / "packages" / profile / "requested.txt").resolve()
     requests = read_requests(requests_path)
     image = platform_image_reference(parent, platform, runner=runner)
-    command = ["docker", "run", "--rm", "--pull=always", "--platform", platform,
-               "--mount", f"type=bind,source={requests_path},target=/tmp/apk-requests.txt,readonly"]
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--pull=always",
+        "--platform",
+        platform,
+        "--mount",
+        f"type=bind,source={requests_path},target={CONTAINER_REQUESTS_PATH},readonly",
+    ]
     executable = "/usr/local/libexec/apk-lock"
     if helper is not None:
-        executable = "/tmp/apk-lock"
-        command.extend(["--mount", f"type=bind,source={helper.resolve()},target={executable},readonly"])
-    script = '''actual=$(apk --print-arch)
+        # This is a read-only bind mount target inside the disposable container.
+        executable = "/tmp/apk-lock"  # nosec B108
+        command.extend(
+            [
+                "--mount",
+                f"type=bind,source={helper.resolve()},target={executable},readonly",
+            ]
+        )
+    script = """actual=$(apk --print-arch)
 if [ "$actual" != "$1" ]; then
   printf 'package architecture mismatch: expected %s, got %s\\n' "$1" "$actual" >&2
   exit 1
 fi
 exec /bin/sh "$2" resolve "$3" "$4"
-'''
-    command.extend(["--entrypoint", "/bin/sh", image, "-ec", script, "apk-lock",
-                    ARCHITECTURES[platform], executable, "/tmp/apk-requests.txt",
-                    "inherited" if inherited else "base"])
+"""
+    command.extend(
+        [
+            "--entrypoint",
+            "/bin/sh",
+            image,
+            "-ec",
+            script,
+            "apk-lock",
+            ARCHITECTURES[platform],
+            executable,
+            CONTAINER_REQUESTS_PATH,
+            "inherited" if inherited else "base",
+        ]
+    )
     completed = runner(command)
     if completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
         if inherited and "apk-lock: inherited package constraints conflict:" in detail:
-            raise BaseUpdateRequired(f"base update required for {profile} on {platform}: {detail}")
-        if (inherited and helper is None and "/usr/local/libexec/apk-lock" in detail
-                and ("No such file" in detail or "not found" in detail)):
+            raise BaseUpdateRequired(
+                f"base update required for {profile} on {platform}: {detail}"
+            )
+        if (
+            inherited
+            and helper is None
+            and "/usr/local/libexec/apk-lock" in detail
+            and ("No such file" in detail or "not found" in detail)
+        ):
             raise BaseUpdateRequired(
                 f"base image {parent} does not provide the APK lock helper; "
                 "publish and adopt the locked base image before refreshing qBittorrent packages"
             )
         raise LockError(f"failed to resolve {profile} on {platform}: {detail}")
-    return PackageLock(ARCHITECTURES[platform], parent, requests_digest(requests), inventory(completed.stdout))
+    return PackageLock(
+        ARCHITECTURES[platform],
+        parent,
+        requests_digest(requests),
+        inventory(completed.stdout),
+    )
 
 
-def package_changes(old: Mapping[str, str], new: Mapping[str, str]) -> list[dict[str, str | None]]:
-    return [{"name": name, "old": old.get(name), "new": new.get(name)}
-            for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name)]
+def package_changes(
+    old: Mapping[str, str], new: Mapping[str, str]
+) -> list[dict[str, str | None]]:
+    return [
+        {"name": name, "old": old.get(name), "new": new.get(name)}
+        for name in sorted(old.keys() | new.keys())
+        if old.get(name) != new.get(name)
+    ]
 
 
-def input_files_digest(root: Path, paths: Sequence[Path],
-                       overrides: Mapping[Path, str] | None = None) -> str:
+def input_files_digest(
+    root: Path, paths: Sequence[Path], overrides: Mapping[Path, str] | None = None
+) -> str:
     """Hash Git-representable file content, executable bits, and symlink identity."""
     overrides = overrides or {}
     digest = hashlib.sha256()
@@ -227,7 +339,11 @@ def input_files_digest(root: Path, paths: Sequence[Path],
         else:
             executable = path.exists() and bool(path.stat().st_mode & 0o111)
             kind = b"executable" if executable else b"file"
-            payload = overrides[path].encode("utf-8") if path in overrides else path.read_bytes()
+            payload = (
+                overrides[path].encode("utf-8")
+                if path in overrides
+                else path.read_bytes()
+            )
         for part in (relative, kind, payload):
             digest.update(str(len(part)).encode("ascii") + b":" + part)
     return digest.hexdigest()
@@ -256,15 +372,20 @@ def write_files(rendered: Mapping[Path, str]) -> None:
     try:
         for path, content in rendered.items():
             path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                             prefix=".apk-lock-", delete=False) as temporary:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=".apk-lock-",
+                delete=False,
+            ) as temporary:
                 staged.append((Path(temporary.name), path))
                 temporary.write(content)
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.chmod(temporary.name, 0o644)
-        for temporary, path in staged:
-            os.replace(temporary, path)
+        for temporary_path, path in staged:
+            os.replace(temporary_path, path)
     finally:
-        for temporary, _ in staged:
-            temporary.unlink(missing_ok=True)
+        for temporary_path, _ in staged:
+            temporary_path.unlink(missing_ok=True)

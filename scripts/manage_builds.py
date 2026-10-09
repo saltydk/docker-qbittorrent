@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
 import json
 import os
-from pathlib import Path
 import re
-import subprocess
+import shutil
+
+# Docker inspections and Git reads use resolved executables without a shell.
+import subprocess  # nosec B404
 import sys
 import time
-from typing import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 # Support both direct script execution in CI and imports from the test suite.
@@ -22,10 +25,17 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.package_locks import (
-    BaseUpdateRequired, LockError, PackageLock, input_files_digest, lock_path, package_changes, parse_lock,
-    resolve_lock, validate_lock, write_files,
+    BaseUpdateRequired,
+    LockError,
+    PackageLock,
+    input_files_digest,
+    lock_path,
+    package_changes,
+    parse_lock,
+    resolve_lock,
+    validate_lock,
+    write_files,
 )
-
 
 VARIANT_ORDER = ("libtorrent1", "libtorrent2", "legacy")
 DOCKERFILES = {name: f"Dockerfile.{name}" for name in VARIANT_ORDER}
@@ -41,7 +51,9 @@ REQUIRED_ARGS = (
     "QBITTORRENT_SHA256_AMD64",
     "QBITTORRENT_SHA256_ARM64",
 )
-ARG_PATTERN = re.compile(r"^ARG\s+([A-Z0-9_]+)=(?:\"([^\"]*)\"|(\S+))\s*$", re.MULTILINE)
+ARG_PATTERN = re.compile(
+    r"^ARG\s+([A-Z0-9_]+)=(?:\"([^\"]*)\"|(\S+))\s*$", re.MULTILINE
+)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 BASE_IMAGE_REPOSITORY = "saltydk/alpine-s6overlay"
@@ -98,7 +110,10 @@ class UpdateDecision:
 
     @property
     def changed(self) -> bool:
-        return any(reason in {"release", "revision", "binary", "base", "packages"} for reason in self.reasons)
+        return any(
+            reason in {"release", "revision", "binary", "base", "packages"}
+            for reason in self.reasons
+        )
 
     @property
     def rebuild(self) -> bool:
@@ -111,19 +126,31 @@ class HttpClient:
         self.retries = retries
 
     def get_json(self, url: str, allow_not_found: bool = False) -> object | None:
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": "docker-qbittorrent-updater"}
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise BuildInputError("upstream requests require an HTTPS URL")
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "docker-qbittorrent-updater",
+        }
         if self.token and url.startswith("https://api.github.com/"):
             headers["Authorization"] = f"Bearer {self.token}"
 
         for attempt in range(1, self.retries + 1):
             try:
-                with urlopen(Request(url, headers=headers), timeout=30) as response:
+                # URLs come from the GitHub/Docker Hub providers and require HTTPS above.
+                with urlopen(Request(url, headers=headers), timeout=30) as response:  # nosec B310
                     return json.load(response)
             except HTTPError as error:
                 if error.code == 404 and allow_not_found:
                     return None
-                if error.code not in {429, 500, 502, 503, 504} or attempt == self.retries:
-                    raise BuildInputError(f"failed to fetch {url}: HTTP {error.code}") from error
+                if (
+                    error.code not in {429, 500, 502, 503, 504}
+                    or attempt == self.retries
+                ):
+                    raise BuildInputError(
+                        f"failed to fetch {url}: HTTP {error.code}"
+                    ) from error
             except (URLError, TimeoutError, json.JSONDecodeError) as error:
                 if attempt == self.retries:
                     raise BuildInputError(f"failed to fetch {url}: {error}") from error
@@ -132,7 +159,19 @@ class HttpClient:
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    if not command or command[0] != "docker":
+        raise BuildInputError("image inspection requires Docker")
+    executable = shutil.which("docker")
+    if executable is None:
+        raise BuildInputError("required Docker executable is unavailable")
+    # Provider methods use resolved Docker with checked inputs and no shell expansion.
+    return subprocess.run(  # nosec B603
+        [executable, *command[1:]],
+        check=False,
+        shell=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _mapping(value: object, description: str) -> Mapping[str, object]:
@@ -167,17 +206,24 @@ class LiveProvider:
     def _target(self, repository: str, release: str, revision: int) -> ArtifactTarget:
         encoded_release = quote(release, safe="")
         release_data = _mapping(
-            self.http.get_json(f"https://api.github.com/repos/{repository}/releases/tags/{encoded_release}"),
+            self.http.get_json(
+                f"https://api.github.com/repos/{repository}/releases/tags/{encoded_release}"
+            ),
             f"{release} release",
         )
         amd64, arm64 = extract_asset_checksums(release_data)
         return ArtifactTarget(release, revision, amd64, arm64)
 
     def artifact_targets(self) -> Mapping[str, ArtifactTarget]:
-        main = _mapping(self.http.get_json(MAIN_METADATA_URL), "main dependency metadata")
+        main = _mapping(
+            self.http.get_json(MAIN_METADATA_URL), "main dependency metadata"
+        )
         qbittorrent = _required_string(main, "qbittorrent", "main dependency metadata")
         targets: dict[str, ArtifactTarget] = {}
-        for name, key in (("libtorrent1", "libtorrent_1_2"), ("libtorrent2", "libtorrent_2_0")):
+        for name, key in (
+            ("libtorrent1", "libtorrent_1_2"),
+            ("libtorrent2", "libtorrent_2_0"),
+        ):
             libtorrent = _required_string(main, key, "main dependency metadata")
             release = f"release-{qbittorrent}_v{libtorrent}"
             metadata = _mapping(
@@ -189,44 +235,77 @@ class LiveProvider:
             revision = _revision(metadata, "revision", f"{release} dependency metadata")
             targets[name] = self._target(MAIN_REPOSITORY, release, revision)
 
-        legacy = _mapping(self.http.get_json(LEGACY_METADATA_URL), "legacy dependency metadata")
-        legacy_qbittorrent = _required_string(legacy, "qbittorrent", "legacy dependency metadata")
-        legacy_libtorrent = _required_string(legacy, "libtorrent_1_2", "legacy dependency metadata")
+        legacy = _mapping(
+            self.http.get_json(LEGACY_METADATA_URL), "legacy dependency metadata"
+        )
+        legacy_qbittorrent = _required_string(
+            legacy, "qbittorrent", "legacy dependency metadata"
+        )
+        legacy_libtorrent = _required_string(
+            legacy, "libtorrent_1_2", "legacy dependency metadata"
+        )
         legacy_revision = _revision(legacy, "revision", "legacy dependency metadata")
         legacy_release = f"release-{legacy_qbittorrent}_v{legacy_libtorrent}"
-        targets["legacy"] = self._target(LEGACY_REPOSITORY, legacy_release, legacy_revision)
+        targets["legacy"] = self._target(
+            LEGACY_REPOSITORY, legacy_release, legacy_revision
+        )
         return targets
 
-    def referenced_targets(self, states: Mapping[str, VariantState]) -> Mapping[str, ArtifactTarget]:
+    def referenced_targets(
+        self, states: Mapping[str, VariantState]
+    ) -> Mapping[str, ArtifactTarget]:
         """Validate committed release assets without discovering newer releases."""
         targets = {}
         for name, current in states.items():
-            metadata = _mapping(self.http.get_json(
-                f"https://github.com/{current.repository}/releases/download/"
-                f"{quote(current.release, safe='')}/dependency-version.json"
-            ), f"{current.release} dependency metadata")
-            targets[name] = self._target(current.repository, current.release,
-                                         _revision(metadata, "revision", current.release))
+            metadata = _mapping(
+                self.http.get_json(
+                    f"https://github.com/{current.repository}/releases/download/"
+                    f"{quote(current.release, safe='')}/dependency-version.json"
+                ),
+                f"{current.release} dependency metadata",
+            )
+            targets[name] = self._target(
+                current.repository,
+                current.release,
+                _revision(metadata, "revision", current.release),
+            )
         return targets
 
     def is_current(self, variant: VariantState, input_sha: str) -> bool:
         if not self.is_published(variant):
             return False
         image = f"{IMAGE_REPOSITORY}:{variant.versioned_tag}"
-        completed = self.runner(["docker", "buildx", "imagetools", "inspect", image,
-                                 "--format", "{{json .Image}}"])
+        completed = self.runner(
+            [
+                "docker",
+                "buildx",
+                "imagetools",
+                "inspect",
+                image,
+                "--format",
+                "{{json .Image}}",
+            ]
+        )
         if completed.returncode:
-            raise BuildInputError(f"failed to inspect published {image}: {completed.stderr.strip()}")
+            raise BuildInputError(
+                f"failed to inspect published {image}: {completed.stderr.strip()}"
+            )
         try:
             images = _mapping(json.loads(completed.stdout), "published image platforms")
         except json.JSONDecodeError as error:
-            raise BuildInputError(f"invalid published image metadata for {image}") from error
+            raise BuildInputError(
+                f"invalid published image metadata for {image}"
+            ) from error
         for platform, _, _ in PLATFORMS:
             if platform not in images:
                 return False
             platform_image = _mapping(images[platform], f"published {platform} image")
-            config = _mapping(platform_image.get("config"), f"published {platform} config")
-            labels = _mapping(config.get("Labels") or {}, f"published {platform} labels")
+            config = _mapping(
+                platform_image.get("config"), f"published {platform} config"
+            )
+            labels = _mapping(
+                config.get("Labels") or {}, f"published {platform} labels"
+            )
             if labels.get("io.saltydk.image-inputs.sha256") != input_sha:
                 return False
         return True
@@ -243,12 +322,16 @@ class LiveProvider:
         ]
         completed = self.runner(command)
         if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
+            detail = (
+                completed.stderr.strip() or completed.stdout.strip() or "unknown error"
+            )
             raise BuildInputError(f"failed to inspect base image: {detail}")
         try:
             manifest_json = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
-            raise BuildInputError("base image inspection returned invalid JSON") from error
+            raise BuildInputError(
+                "base image inspection returned invalid JSON"
+            ) from error
         metadata = _mapping(manifest_json, "base image metadata")
         manifest = _mapping(metadata.get("manifest"), "base image manifest")
         digest = _required_string(manifest, "digest", "base image manifest")
@@ -258,12 +341,18 @@ class LiveProvider:
             image = _mapping(images.get(platform), f"base image {platform} metadata")
             config = _mapping(image.get("config"), f"base image {platform} config")
             labels = _mapping(config.get("Labels"), f"base image {platform} labels")
-            revision = _required_string(labels, OCI_REVISION_LABEL, f"base image {platform} labels")
+            revision = _required_string(
+                labels, OCI_REVISION_LABEL, f"base image {platform} labels"
+            )
             if not GIT_SHA_PATTERN.fullmatch(revision):
-                raise BuildInputError(f"base image {platform} has an invalid OCI revision label")
+                raise BuildInputError(
+                    f"base image {platform} has an invalid OCI revision label"
+                )
             revisions.add(revision)
         if len(revisions) != 1:
-            raise BuildInputError("base image platforms do not share one OCI revision label")
+            raise BuildInputError(
+                "base image platforms do not share one OCI revision label"
+            )
 
         revision = revisions.pop()
         sha_tag = f"{BASE_IMAGE_REPOSITORY}:sha-{revision}"
@@ -278,20 +367,32 @@ class LiveProvider:
         ]
         tag_completed = self.runner(tag_command)
         if tag_completed.returncode != 0:
-            detail = tag_completed.stderr.strip() or tag_completed.stdout.strip() or "unknown error"
+            detail = (
+                tag_completed.stderr.strip()
+                or tag_completed.stdout.strip()
+                or "unknown error"
+            )
             raise BuildInputError(f"failed to inspect base image SHA tag: {detail}")
         try:
             tag_manifest_json = json.loads(tag_completed.stdout)
         except json.JSONDecodeError as error:
-            raise BuildInputError("base image SHA tag inspection returned invalid JSON") from error
+            raise BuildInputError(
+                "base image SHA tag inspection returned invalid JSON"
+            ) from error
         tag_manifest = _mapping(tag_manifest_json, "base image SHA tag manifest")
-        tag_digest = _required_string(tag_manifest, "digest", "base image SHA tag manifest")
+        tag_digest = _required_string(
+            tag_manifest, "digest", "base image SHA tag manifest"
+        )
         if tag_digest != digest:
-            raise BuildInputError("base image SHA tag does not match the latest manifest digest")
+            raise BuildInputError(
+                "base image SHA tag does not match the latest manifest digest"
+            )
 
         base_image = f"{sha_tag}@{digest}"
         if not BASE_IMAGE_PATTERN.fullmatch(base_image):
-            raise BuildInputError("base image manifest returned an invalid source SHA tag or digest")
+            raise BuildInputError(
+                "base image manifest returned an invalid source SHA tag or digest"
+            )
         return base_image
 
     def is_published(self, variant: VariantState) -> bool:
@@ -309,22 +410,33 @@ def _validate_sha256(value: str, field: str) -> None:
 
 
 def parse_variant(name: str, dockerfile: str, text: str) -> VariantState:
-    values = {match.group(1): match.group(2) if match.group(2) is not None else match.group(3) for match in ARG_PATTERN.finditer(text)}
+    values = {
+        match.group(1): match.group(2) if match.group(2) is not None else match.group(3)
+        for match in ARG_PATTERN.finditer(text)
+    }
     missing = [argument for argument in REQUIRED_ARGS if argument not in values]
     if missing:
-        raise BuildInputError(f"{dockerfile} is missing required arguments: {', '.join(missing)}")
+        raise BuildInputError(
+            f"{dockerfile} is missing required arguments: {', '.join(missing)}"
+        )
 
     if not BASE_IMAGE_PATTERN.fullmatch(values["BASE_IMAGE"]):
-        raise BuildInputError(f"{dockerfile} BASE_IMAGE must include the source SHA tag and manifest digest")
+        raise BuildInputError(
+            f"{dockerfile} BASE_IMAGE must include the source SHA tag and manifest digest"
+        )
     _validate_sha256(values["QBITTORRENT_SHA256_AMD64"], "QBITTORRENT_SHA256_AMD64")
     _validate_sha256(values["QBITTORRENT_SHA256_ARM64"], "QBITTORRENT_SHA256_ARM64")
 
     try:
         revision = int(values["QBITTORRENT_REVISION"])
     except ValueError as error:
-        raise BuildInputError(f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer") from error
+        raise BuildInputError(
+            f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer"
+        ) from error
     if revision < 0:
-        raise BuildInputError(f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer")
+        raise BuildInputError(
+            f"{dockerfile} QBITTORRENT_REVISION must be a non-negative integer"
+        )
 
     return VariantState(
         name=name,
@@ -353,13 +465,17 @@ def render_variant(text: str, state: VariantState) -> str:
         pattern = re.compile(rf"^ARG\s+{re.escape(argument)}=.*$", re.MULTILINE)
         rendered, count = pattern.subn(f'ARG {argument}="{value}"', rendered, count=1)
         if count != 1:
-            raise BuildInputError(f"{state.dockerfile} must contain exactly one {argument} argument")
+            raise BuildInputError(
+                f"{state.dockerfile} must contain exactly one {argument} argument"
+            )
     return rendered
 
 
 def load_states(root: Path) -> dict[str, VariantState]:
     states = {
-        name: parse_variant(name, dockerfile, (root / dockerfile).read_text(encoding="utf-8"))
+        name: parse_variant(
+            name, dockerfile, (root / dockerfile).read_text(encoding="utf-8")
+        )
         for name, dockerfile in DOCKERFILES.items()
     }
     if len({variant.base_image for variant in states.values()}) != 1:
@@ -391,14 +507,22 @@ def extract_asset_checksums(release: Mapping[str, object]) -> tuple[str, str]:
             continue
         name = item.get("name")
         digest = item.get("digest")
-        if name in {"x86_64-qbittorrent-nox", "aarch64-qbittorrent-nox"} and isinstance(digest, str):
+        if name in {"x86_64-qbittorrent-nox", "aarch64-qbittorrent-nox"} and isinstance(
+            digest, str
+        ):
             value = digest.removeprefix("sha256:")
             _validate_sha256(value, str(name))
             digests[str(name)] = value
 
-    missing = [name for name in ("x86_64-qbittorrent-nox", "aarch64-qbittorrent-nox") if name not in digests]
+    missing = [
+        name
+        for name in ("x86_64-qbittorrent-nox", "aarch64-qbittorrent-nox")
+        if name not in digests
+    ]
     if missing:
-        raise BuildInputError(f"release response is missing checksums for: {', '.join(missing)}")
+        raise BuildInputError(
+            f"release response is missing checksums for: {', '.join(missing)}"
+        )
     return digests["x86_64-qbittorrent-nox"], digests["aarch64-qbittorrent-nox"]
 
 
@@ -412,7 +536,9 @@ def compute_update(
     _validate_sha256(target.sha256_amd64, "target amd64 checksum")
     _validate_sha256(target.sha256_arm64, "target arm64 checksum")
     if not BASE_IMAGE_PATTERN.fullmatch(base_image):
-        raise BuildInputError("target base image must include the source SHA tag and manifest digest")
+        raise BuildInputError(
+            "target base image must include the source SHA tag and manifest digest"
+        )
     if target.revision < 0:
         raise BuildInputError("target upstream revision must be non-negative")
 
@@ -459,7 +585,9 @@ def validate_artifact_inputs(
     for name, current in states.items():
         target = targets.get(name)
         if target is None:
-            raise BuildInputError(f"no upstream artifact target was resolved for {name}")
+            raise BuildInputError(
+                f"no upstream artifact target was resolved for {name}"
+            )
         if current.revision != target.revision:
             version_mismatches.append(
                 f"{name} QBITTORRENT_REVISION is {current.revision}; "
@@ -473,9 +601,13 @@ def validate_artifact_inputs(
             )
             continue
         if current.sha256_amd64 != target.sha256_amd64:
-            raise BuildInputError(f"{name} amd64 checksum does not match the upstream artifact")
+            raise BuildInputError(
+                f"{name} amd64 checksum does not match the upstream artifact"
+            )
         if current.sha256_arm64 != target.sha256_arm64:
-            raise BuildInputError(f"{name} arm64 checksum does not match the upstream artifact")
+            raise BuildInputError(
+                f"{name} arm64 checksum does not match the upstream artifact"
+            )
     if version_mismatches:
         raise UpstreamVersionMismatch("; ".join(version_mismatches))
 
@@ -483,8 +615,10 @@ def validate_artifact_inputs(
 def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
     selected: set[str] = set()
     for path in changed_paths:
-        if (path.startswith(("root/", "packages/", ".github/workflows/"))
-                or path in {"scripts/manage_builds.py", "scripts/package_locks.py"}):
+        if path.startswith(("root/", "packages/", ".github/workflows/")) or path in {
+            "scripts/manage_builds.py",
+            "scripts/package_locks.py",
+        }:
             selected.update(VARIANT_ORDER)
         elif path.startswith("root-legacy/"):
             selected.add("legacy")
@@ -496,14 +630,28 @@ def select_variants(changed_paths: Iterable[str]) -> tuple[str, ...]:
     return tuple(name for name in VARIANT_ORDER if name in selected)
 
 
-def image_inputs_digest(root: Path, name: str, overrides: Mapping[Path, str] | None = None) -> str:
+def image_inputs_digest(
+    root: Path, name: str, overrides: Mapping[Path, str] | None = None
+) -> str:
     overrides = overrides or {}
     paths = {root / DOCKERFILES[name]}
-    for directory in ("packages", "root", *(("root-legacy",) if name == "legacy" else ())):
-        paths.update(path for path in (root / directory).rglob("*") if path.is_file() or path.is_symlink())
+    for directory in (
+        "packages",
+        "root",
+        *(("root-legacy",) if name == "legacy" else ()),
+    ):
+        paths.update(
+            path
+            for path in (root / directory).rglob("*")
+            if path.is_file() or path.is_symlink()
+        )
     paths.update(overrides)
-    paths = {path for path in paths if path.name == DOCKERFILES[name]
-             or path.relative_to(root).parts[0] in {"packages", "root", "root-legacy"}}
+    paths = {
+        path
+        for path in paths
+        if path.name == DOCKERFILES[name]
+        or path.relative_to(root).parts[0] in {"packages", "root", "root-legacy"}
+    }
     if name != "legacy":
         paths = {p for p in paths if p.relative_to(root).parts[0] != "root-legacy"}
     return input_files_digest(root, list(paths), overrides)
@@ -518,7 +666,9 @@ class PreparedUpdate:
         write_files(self.files)
 
 
-def prepare_updates(root: Path, provider: LiveProvider, *, resolver=resolve_lock) -> PreparedUpdate:
+def prepare_updates(
+    root: Path, provider: LiveProvider, *, resolver=resolve_lock
+) -> PreparedUpdate:
     """Resolve one complete input set before writing or requesting a build."""
     states = load_states(root)
     targets = provider.artifact_targets()
@@ -539,8 +689,9 @@ def prepare_updates(root: Path, provider: LiveProvider, *, resolver=resolve_lock
     for name, current in states.items():
         if name not in targets:
             raise BuildInputError(f"no artifact target was resolved for {name}")
-        decision = compute_update(current, targets[name], parent,
-                                  packages_changed=packages_changed)
+        decision = compute_update(
+            current, targets[name], parent, packages_changed=packages_changed
+        )
         path = root / current.dockerfile
         original = path.read_text(encoding="utf-8")
         rendered = render_variant(original, decision.state)
@@ -552,12 +703,17 @@ def prepare_updates(root: Path, provider: LiveProvider, *, resolver=resolve_lock
     # the current branch SHA (other variants or documentation may have changed).
     for name, decision in decisions.items():
         if not decision.reasons and not provider.is_current(
-                decision.state, image_inputs_digest(root, name, files)):
+            decision.state, image_inputs_digest(root, name, files)
+        ):
             decisions[name] = UpdateDecision(decision.state, ("pending-publication",))
 
     changed = [name for name, decision in decisions.items() if decision.changed]
     rebuild = [name for name, decision in decisions.items() if decision.reasons]
-    pending = [name for name, decision in decisions.items() if decision.reasons == ("pending-publication",)]
+    pending = [
+        name
+        for name, decision in decisions.items()
+        if decision.reasons == ("pending-publication",)
+    ]
     images = []
     for name, current in states.items():
         target = decisions[name].state
@@ -565,25 +721,67 @@ def prepare_updates(root: Path, provider: LiveProvider, *, resolver=resolve_lock
             old = old_locks[architecture]
             lock = locks[architecture]
             inputs = [
-                {"name": "qBittorrent release", "old": current.release, "new": target.release},
-                {"name": "qBittorrent revision", "old": str(current.revision), "new": str(target.revision)},
-                {"name": "base image", "old": current.base_image, "new": target.base_image},
-                {"name": "qBittorrent binary SHA-256", "old": getattr(current, f"sha256_{slug}"),
-                 "new": getattr(target, f"sha256_{slug}")},
+                {
+                    "name": "qBittorrent release",
+                    "old": current.release,
+                    "new": target.release,
+                },
+                {
+                    "name": "qBittorrent revision",
+                    "old": str(current.revision),
+                    "new": str(target.revision),
+                },
+                {
+                    "name": "base image",
+                    "old": current.base_image,
+                    "new": target.base_image,
+                },
+                {
+                    "name": "qBittorrent binary SHA-256",
+                    "old": getattr(current, f"sha256_{slug}"),
+                    "new": getattr(target, f"sha256_{slug}"),
+                },
             ]
             if old is None:
-                inputs.append({"name": "initial package lock", "old": None, "new": lock.digest})
-            images.append({"name": name, "platform": platform, "stage": "runtime",
-                           "changes": package_changes(old.packages, lock.packages) if old else None,
-                           "inputs": inputs, "lock_digest": lock.digest,
-                           "packages": lock.packages})
-    report = {"schema": 1, "kind": "update", "repository": "saltydk/docker-qbittorrent",
-              "status": "update-available" if files else "pending-publication" if pending else "no-changes",
-              "changed": changed, "rebuild": rebuild, "pending": pending, "images": images,
-              "changed_files": [p.relative_to(root).as_posix() for p in sorted(files)],
-              "variants": {name: {"current": states[name].versioned_tag,
-                                   "target": decision.state.versioned_tag, "reasons": list(decision.reasons)}
-                           for name, decision in decisions.items()}}
+                inputs.append(
+                    {"name": "initial package lock", "old": None, "new": lock.digest}
+                )
+            images.append(
+                {
+                    "name": name,
+                    "platform": platform,
+                    "stage": "runtime",
+                    "changes": package_changes(old.packages, lock.packages)
+                    if old
+                    else None,
+                    "inputs": inputs,
+                    "lock_digest": lock.digest,
+                    "packages": lock.packages,
+                }
+            )
+    report = {
+        "schema": 1,
+        "kind": "update",
+        "repository": "saltydk/docker-qbittorrent",
+        "status": "update-available"
+        if files
+        else "pending-publication"
+        if pending
+        else "no-changes",
+        "changed": changed,
+        "rebuild": rebuild,
+        "pending": pending,
+        "images": images,
+        "changed_files": [p.relative_to(root).as_posix() for p in sorted(files)],
+        "variants": {
+            name: {
+                "current": states[name].versioned_tag,
+                "target": decision.state.versioned_tag,
+                "reasons": list(decision.reasons),
+            }
+            for name, decision in decisions.items()
+        },
+    }
     return PreparedUpdate(files, report)
 
 
@@ -598,15 +796,20 @@ def _tags(state: VariantState) -> list[str]:
     return tags
 
 
-def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str],
-                   root: Path | None = None) -> dict[str, object]:
+def build_matrices(
+    states: Mapping[str, VariantState],
+    selected: Sequence[str],
+    root: Path | None = None,
+) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
     publish: list[dict[str, object]] = []
     for name in selected:
         current = states[name]
         release_match = re.fullmatch(r"release-([^_]+)_v.+", current.release)
         if not release_match:
-            raise BuildInputError(f"{current.dockerfile} has an invalid QBITTORRENT_RELEASE")
+            raise BuildInputError(
+                f"{current.dockerfile} has an invalid QBITTORRENT_RELEASE"
+            )
         qbittorrent_version = release_match.group(1)
         libtorrent_prefix = "2.0." if name == "libtorrent2" else "1.2."
         config_profile = "legacy" if name == "legacy" else "modern"
@@ -641,10 +844,15 @@ def build_matrices(states: Mapping[str, VariantState], selected: Sequence[str],
 
 
 def _changed_paths(root: Path, before: str, after: str) -> list[str]:
-    completed = subprocess.run(
-        ["git", "diff", "--name-only", before, after, "--"],
+    executable = shutil.which("git")
+    if executable is None:
+        raise BuildInputError("required Git executable is unavailable")
+    # Workflow revisions stay separate argv in a resolved Git read without a shell.
+    completed = subprocess.run(  # nosec B603
+        [executable, "diff", "--name-only", before, after, "--"],
         cwd=root,
         check=False,
+        shell=False,
         capture_output=True,
         text=True,
     )
@@ -689,12 +897,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         states = load_states(root)
         if args.command == "update":
-            provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
+            provider = LiveProvider(
+                HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN"))
+            )
             prepared = prepare_updates(root, provider)
             if args.write:
                 prepared.write()
             report = prepared.report
             from scripts.build_report import write_report
+
             write_report(report, json_path=args.report, summary_path=args.summary)
             if args.github_output:
                 _write_github_outputs(
@@ -702,30 +913,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "changed": str(bool(report["changed"])).lower(),
                         "waiting-for-base": "false",
-                        "changed-variants": json.dumps(report["changed"], separators=(",", ":")),
+                        "changed-variants": json.dumps(
+                            report["changed"], separators=(",", ":")
+                        ),
                         "rebuild": str(bool(report["rebuild"])).lower(),
-                        "rebuild-variants": json.dumps(report["rebuild"], separators=(",", ":")),
+                        "rebuild-variants": json.dumps(
+                            report["rebuild"], separators=(",", ":")
+                        ),
                         "report": json.dumps(report, separators=(",", ":")),
                     },
                 )
         elif args.command == "verify":
             for _, _, architecture in PLATFORMS:
-                validate_lock(root, "runtime", architecture, states["libtorrent1"].base_image)
-            provider = LiveProvider(HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")))
+                validate_lock(
+                    root, "runtime", architecture, states["libtorrent1"].base_image
+                )
+            provider = LiveProvider(
+                HttpClient(os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN"))
+            )
             validate_artifact_inputs(states, provider.referenced_targets(states))
             report = {"verified": list(VARIANT_ORDER)}
         else:
             if args.all:
-                selected = VARIANT_ORDER
+                selected: tuple[str, ...] = VARIANT_ORDER
             elif args.variants is not None:
                 try:
                     requested = json.loads(args.variants)
                 except json.JSONDecodeError as error:
-                    raise BuildInputError("--variants must be a JSON array of known variant names") from error
-                if (not isinstance(requested, list) or any(not isinstance(name, str) or name not in VARIANT_ORDER
-                                                          for name in requested)
-                        or len(set(requested)) != len(requested)):
-                    raise BuildInputError("--variants must contain unique known variant names")
+                    raise BuildInputError(
+                        "--variants must be a JSON array of known variant names"
+                    ) from error
+                if (
+                    not isinstance(requested, list)
+                    or any(
+                        not isinstance(name, str) or name not in VARIANT_ORDER
+                        for name in requested
+                    )
+                    or len(set(requested)) != len(requested)
+                ):
+                    raise BuildInputError(
+                        "--variants must contain unique known variant names"
+                    )
                 selected = tuple(name for name in VARIANT_ORDER if name in requested)
             else:
                 if not args.after:
@@ -742,8 +970,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.github_output,
                     {
                         "has-builds": str(bool(selected)).lower(),
-                        "candidate-matrix": json.dumps(matrices["candidates"], separators=(",", ":")),
-                        "publish-matrix": json.dumps(matrices["publish"], separators=(",", ":")),
+                        "candidate-matrix": json.dumps(
+                            matrices["candidates"], separators=(",", ":")
+                        ),
+                        "publish-matrix": json.dumps(
+                            matrices["publish"], separators=(",", ":")
+                        ),
                     },
                 )
     except UpstreamVersionMismatch as error:
@@ -752,17 +984,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (BuildInputError, LockError, OSError) as error:
         if args.command == "update":
             from scripts.build_report import write_report
-            failure = {"schema": 1, "kind": "update", "repository": "saltydk/docker-qbittorrent",
-                       "status": "waiting-for-base" if isinstance(error, BaseUpdateRequired) else "failed",
-                       "error": str(error), "images": []}
+
+            failure = {
+                "schema": 1,
+                "kind": "update",
+                "repository": "saltydk/docker-qbittorrent",
+                "status": "waiting-for-base"
+                if isinstance(error, BaseUpdateRequired)
+                else "failed",
+                "error": str(error),
+                "images": [],
+            }
             write_report(failure, json_path=args.report, summary_path=args.summary)
             if isinstance(error, BaseUpdateRequired):
                 if args.github_output:
-                    _write_github_outputs(args.github_output, {
-                        "waiting-for-base": "true", "changed": "false", "changed-variants": "[]",
-                        "rebuild": "false", "rebuild-variants": "[]",
-                        "report": json.dumps(failure, separators=(",", ":")),
-                    })
+                    _write_github_outputs(
+                        args.github_output,
+                        {
+                            "waiting-for-base": "true",
+                            "changed": "false",
+                            "changed-variants": "[]",
+                            "rebuild": "false",
+                            "rebuild-variants": "[]",
+                            "report": json.dumps(failure, separators=(",", ":")),
+                        },
+                    )
                 print(str(error), file=sys.stderr)
                 return 4
         print(str(error), file=sys.stderr)

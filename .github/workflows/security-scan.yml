@@ -7,6 +7,10 @@ on:
         description: Exact source whose recipes define published runtime acceptance
         type: string
         default: ''
+      published-images:
+        description: JSON object of variant names and the immutable images this source published
+        type: string
+        default: ''
       artifact-prefix:
         description: Unique artifact prefix for this invocation
         type: string
@@ -28,17 +32,30 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.snapshot.outputs.matrix }}
+      matrix: ${{ steps.targets.outputs.matrix || steps.snapshot.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: docker/setup-buildx-action@v4.3.0
+      - name: Select published image targets
+        id: targets
+        env:
+          PUBLISHED_IMAGES: ${{ inputs.published-images }}
+        run: >-
+          python3 -m scripts.publication_security targets
+          --published-images-json "$PUBLISHED_IMAGES"
+          --github-output "$GITHUB_OUTPUT"
+          --output expected-targets.json
       - id: snapshot
+        if: steps.targets.outputs.recorded != 'true'
         uses: saltyorg/github-actions/container-snapshot@v1.3.2
         with:
-          targets: '[{"name":"libtorrent1","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent1","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent1"},{"name":"libtorrent2","platform":"linux/amd64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"libtorrent2","platform":"linux/arm64","image":"saltydk/qbittorrent:libtorrent2"},{"name":"legacy","platform":"linux/amd64","image":"saltydk/qbittorrent:legacy"},{"name":"legacy","platform":"linux/arm64","image":"saltydk/qbittorrent:legacy"}]'
+          targets: ${{ steps.targets.outputs.targets }}
       - uses: actions/upload-artifact@v7
         with:
           name: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-snapshot
-          path: ${{ steps.snapshot.outputs.expected-targets }}
+          path: ${{ steps.targets.outputs.expected-targets || steps.snapshot.outputs.expected-targets }}
           if-no-files-found: error
 
   scan:
@@ -92,6 +109,9 @@ jobs:
       issues: write
       security-events: write
     steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: docker/setup-buildx-action@v4.3.0
       - uses: actions/download-artifact@v8
         with:
@@ -104,7 +124,15 @@ jobs:
           pattern: docker-qbittorrent-security-${{ inputs.artifact-prefix || 'published' }}-published-*
           path: security-reports
           merge-multiple: false
+      - name: Check repository-wide report coverage
+        id: scope
+        run: >-
+          python3 -m scripts.publication_security scope
+          --expected-targets snapshot/expected-targets.json
+          --github-output "$GITHUB_OUTPUT"
+          --output container-security-report.json
       - name: Report current published vulnerabilities
+        if: steps.scope.outputs.eligible == 'true'
         uses: saltyorg/github-actions/container-report@v1.3.2
         with:
           reports-directory: security-reports
