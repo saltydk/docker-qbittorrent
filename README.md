@@ -1,13 +1,19 @@
 # Container images for qBittorrent
 
-The repository publishes three image variants for `linux/amd64` and
+The repository publishes four image variants for `linux/amd64` and
 `linux/arm64`.
 
 | Variant | qBittorrent line | libtorrent line | Moving tags |
 | --- | --- | --- | --- |
 | `libtorrent1` | Current | 1.2 | `latest`, `libtorrent1` |
 | `libtorrent2` | Current | 2.0 | `libtorrent2` |
+| `libtorrent21` | Current | 2.1 | `libtorrent21` |
 | `legacy` | 4.3.9 | 1.2 | `legacy` |
+
+The `latest` tag stays on libtorrent 1.2. The
+[qBittorrent 5.3.0 announcement](https://www.qbittorrent.org/news) notes that
+libtorrent 2.1 has worse read performance than 1.2 for heavy seeders. Use
+`libtorrent2` or `libtorrent21` to select either newer line explicitly.
 
 Every build also publishes `<release>` and `<release>-<upstream revision>`
 tags. The revision is the upstream static-binary build revision. Base-image and
@@ -36,6 +42,7 @@ Choose the Dockerfile matching the required variant:
 ```shell
 docker buildx build --platform linux/amd64 -f Dockerfile.libtorrent1 .
 docker buildx build --platform linux/arm64 -f Dockerfile.libtorrent2 .
+docker buildx build --platform linux/amd64 -f Dockerfile.libtorrent21 .
 docker buildx build --platform linux/amd64 -f Dockerfile.legacy .
 ```
 
@@ -84,7 +91,13 @@ not guaranteed to rebuild indefinitely.
 
 The scheduled updater checks qBittorrent releases, upstream build revisions,
 both architecture-specific binary digests, the base-image manifest, and
-compatible additional Alpine packages. It commits all resolved inputs only after
+compatible additional Alpine packages. The updater checks all published releases
+for each libtorrent line, including those upstream marks as prereleases. It
+selects the highest published qBittorrent and libtorrent versions independently
+for 1.2, 2.0, and 2.1, and reads each variant's build revision from its own release.
+Runtime checks use the libtorrent line in the pinned release tag.
+
+The updater commits all resolved inputs only after
 both architectures succeed, then explicitly builds that exact commit. Builds
 verify the tracked release, revision, and architecture checksums against the
 referenced release assets, without requiring the release to remain the latest.
@@ -109,7 +122,7 @@ publication, while CISA KEV findings remain blocking. Runtime acceptance and
 package-lock verification stay required. Scanner downloads and network calls
 retry useful transient failures inside Python.
 
-Scheduled scans and scans after publication assess all three published variants
+Scheduled scans and scans after publication assess all four published variants
 on amd64 and arm64. They retain raw reports and reconcile CVE issues only against
 complete, current published-image coverage. Missing assessments preserve issues;
 manual closures are respected. The reporting workflow is separate from candidate

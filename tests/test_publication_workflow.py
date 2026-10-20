@@ -8,17 +8,22 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from scripts.manage_builds import VARIANT_ORDER
+
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".github/workflows/build.yml"
 DIGEST = "sha256:" + "d" * 64
-VARIANTS = ("libtorrent1", "libtorrent2", "legacy")
+VARIANTS = VARIANT_ORDER
 
 
 def tags(variant):
-    return [
+    references = [
         f"saltydk/qbittorrent:release-{variant}-fixture",
         f"saltydk/qbittorrent:{variant}",
     ]
+    if variant == "libtorrent1":
+        references.append("saltydk/qbittorrent:latest")
+    return references
 
 
 class PublicationWorkflowTests(unittest.TestCase):
@@ -152,14 +157,19 @@ class PublicationWorkflowTests(unittest.TestCase):
     def test_mixed_results_record_only_actually_published_variants(self):
         self.publication("libtorrent1", False)
         self.publication("libtorrent2", True)
-        result = self.report(("libtorrent1", "libtorrent2"))
+        self.publication("libtorrent21", True)
+        result = self.report(("libtorrent1", "libtorrent2", "libtorrent21"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             json.loads(self.outputs()["published-images"]),
-            {"libtorrent2": f"saltydk/qbittorrent@{DIGEST}"},
+            {
+                "libtorrent2": f"saltydk/qbittorrent@{DIGEST}",
+                "libtorrent21": f"saltydk/qbittorrent@{DIGEST}",
+            },
         )
         self.assertEqual(
-            json.loads(self.outputs()["published-variants"]), ["libtorrent2"]
+            json.loads(self.outputs()["published-variants"]),
+            ["libtorrent2", "libtorrent21"],
         )
         self.assertEqual(
             json.loads((self.root / "build-report.json").read_text())["status"],
@@ -229,7 +239,7 @@ class PublicationWorkflowTests(unittest.TestCase):
             "--publish-matrix-json",
             json.dumps({"include": [{"variant": variant} for variant in VARIANTS]}),
             "--published-variants-json",
-            '["libtorrent2"]',
+            '["libtorrent21"]',
             "--publish-result",
             "success",
             module="scripts.notification",
@@ -237,7 +247,7 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads((self.root / "notification.json").read_text())
         self.assertEqual(
-            [field["name"] for field in payload["fields"]], ["libtorrent2"]
+            [field["name"] for field in payload["fields"]], ["libtorrent21"]
         )
 
     def test_failed_publication_notification_preserves_attempted_variants(self):

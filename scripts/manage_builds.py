@@ -37,7 +37,8 @@ from scripts.package_locks import (
     write_files,
 )
 
-VARIANT_ORDER = ("libtorrent1", "libtorrent2", "legacy")
+LIBTORRENT_LINES = {"libtorrent1": "1.2", "libtorrent2": "2.0", "libtorrent21": "2.1"}
+VARIANT_ORDER = (*LIBTORRENT_LINES, "legacy")
 DOCKERFILES = {name: f"Dockerfile.{name}" for name in VARIANT_ORDER}
 PLATFORMS = (
     ("linux/amd64", "amd64", "x86_64"),
@@ -62,7 +63,6 @@ BASE_IMAGE_PATTERN = re.compile(
 )
 MAIN_REPOSITORY = "userdocs/qbittorrent-nox-static"
 LEGACY_REPOSITORY = "userdocs/qbittorrent-nox-static-legacy"
-MAIN_METADATA_URL = f"https://github.com/{MAIN_REPOSITORY}/releases/latest/download/dependency-version.json"
 LEGACY_METADATA_URL = f"https://github.com/{LEGACY_REPOSITORY}/releases/latest/download/dependency-version.json"
 BASE_IMAGE_TAG = f"{BASE_IMAGE_REPOSITORY}:latest"
 BASE_IMAGE_PLATFORMS = ("linux/amd64", "linux/arm64", "linux/arm/v7")
@@ -214,18 +214,46 @@ class LiveProvider:
         amd64, arm64 = extract_asset_checksums(release_data)
         return ArtifactTarget(release, revision, amd64, arm64)
 
+    def _latest_libtorrent_releases(self) -> dict[str, str]:
+        # Each line can use a different qBittorrent version, including prereleases.
+        variants = {line: name for name, line in LIBTORRENT_LINES.items()}
+        candidates: dict[str, tuple[tuple[int, ...], int, str]] = {}
+        page = 1
+        while True:
+            releases = self.http.get_json(
+                f"https://api.github.com/repos/{MAIN_REPOSITORY}/releases"
+                f"?per_page=100&page={page}"
+            )
+            if not isinstance(releases, list):
+                raise BuildInputError("upstream releases must be a JSON array")
+            for value in releases:
+                release = _mapping(value, "upstream release")
+                if release.get("draft"):
+                    continue
+                tag = _required_string(release, "tag_name", "upstream release")
+                match = re.fullmatch(r"release-(\d+\.\d+\.\d+)_v(\d+\.\d+)\.(\d+)", tag)
+                if match and match.group(2) in variants:
+                    name = variants[match.group(2)]
+                    candidate = (
+                        tuple(int(part) for part in match.group(1).split(".")),
+                        int(match.group(3)),
+                        tag,
+                    )
+                    if name not in candidates or candidate > candidates[name]:
+                        candidates[name] = candidate
+            if len(releases) < 100:
+                break
+            page += 1
+        for name, line in LIBTORRENT_LINES.items():
+            if name not in candidates:
+                raise BuildInputError(
+                    f"no published libtorrent {line} release was found"
+                )
+        return {name: candidates[name][2] for name in LIBTORRENT_LINES}
+
     def artifact_targets(self) -> Mapping[str, ArtifactTarget]:
-        main = _mapping(
-            self.http.get_json(MAIN_METADATA_URL), "main dependency metadata"
-        )
-        qbittorrent = _required_string(main, "qbittorrent", "main dependency metadata")
         targets: dict[str, ArtifactTarget] = {}
-        for name, key in (
-            ("libtorrent1", "libtorrent_1_2"),
-            ("libtorrent2", "libtorrent_2_0"),
-        ):
-            libtorrent = _required_string(main, key, "main dependency metadata")
-            release = f"release-{qbittorrent}_v{libtorrent}"
+        for name, release in self._latest_libtorrent_releases().items():
             metadata = _mapping(
                 self.http.get_json(
                     f"https://github.com/{MAIN_REPOSITORY}/releases/download/{quote(release, safe='')}/dependency-version.json"
@@ -805,13 +833,20 @@ def build_matrices(
     publish: list[dict[str, object]] = []
     for name in selected:
         current = states[name]
-        release_match = re.fullmatch(r"release-([^_]+)_v.+", current.release)
+        release_match = re.fullmatch(
+            r"release-([^_]+)_v(\d+\.\d+)\.\d+", current.release
+        )
         if not release_match:
             raise BuildInputError(
                 f"{current.dockerfile} has an invalid QBITTORRENT_RELEASE"
             )
+        expected_line = LIBTORRENT_LINES[name] if name != "legacy" else "1.2"
+        if release_match.group(2) != expected_line:
+            raise BuildInputError(
+                f"{current.dockerfile} must use libtorrent {expected_line}"
+            )
         qbittorrent_version = release_match.group(1)
-        libtorrent_prefix = "2.0." if name == "libtorrent2" else "1.2."
+        libtorrent_prefix = f"{release_match.group(2)}."
         config_profile = "legacy" if name == "legacy" else "modern"
         input_sha = image_inputs_digest(root, name) if root is not None else ""
         publish.append(

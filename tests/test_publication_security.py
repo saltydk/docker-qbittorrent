@@ -8,10 +8,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from scripts.manage_builds import VARIANT_ORDER
+
 ROOT = Path(__file__).resolve().parents[1]
 DIGEST = "sha256:" + "d" * 64
 NEWER_DIGEST = "sha256:" + "e" * 64
-VARIANTS = ("legacy", "libtorrent1", "libtorrent2")
+VARIANTS = tuple(sorted(VARIANT_ORDER))
 PLATFORMS = ("linux/amd64", "linux/arm64")
 
 
@@ -124,7 +126,7 @@ class PublicationSecurityTests(unittest.TestCase):
             "--published-images-json",
             json.dumps(
                 {
-                    "libtorrent2": f"saltydk/qbittorrent@{DIGEST}",
+                    "libtorrent21": f"saltydk/qbittorrent@{DIGEST}",
                 }
             ),
         )
@@ -137,10 +139,10 @@ class PublicationSecurityTests(unittest.TestCase):
             targets,
             [
                 {
-                    "name": "libtorrent2",
+                    "name": "libtorrent21",
                     "platform": platform,
                     "image": f"saltydk/qbittorrent@{DIGEST}",
-                    "tracking_reference": "saltydk/qbittorrent:libtorrent2",
+                    "tracking_reference": "saltydk/qbittorrent:libtorrent21",
                 }
                 for platform in PLATFORMS
             ],
@@ -163,6 +165,7 @@ class PublicationSecurityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         outputs = self.outputs()
         self.assertEqual(outputs["recorded"], "false")
+        self.assertEqual(len(json.loads(outputs["targets"])), 8)
         self.assertEqual(
             json.loads(outputs["targets"]),
             [
@@ -229,9 +232,24 @@ class PublicationSecurityTests(unittest.TestCase):
             ],
         )
 
+    def test_full_coverage_requires_libtorrent_2_1_on_both_platforms(self):
+        self.targets(
+            tuple(variant for variant in VARIANTS if variant != "libtorrent21")
+        )
+
+        result = self.scope()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.github_output.read_text(), "eligible=false\n")
+        self.assertFalse(self.commands.exists())
+        self.assertEqual(
+            json.loads(self.output.read_text())["reason"],
+            "only a subset of published variants was assessed",
+        )
+
     def test_full_stale_scan_defers_successfully(self):
         self.targets()
-        self.registry_responses(libtorrent1={"digest": NEWER_DIGEST})
+        self.registry_responses(libtorrent21={"digest": NEWER_DIGEST})
         result = self.scope()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.github_output.read_text(), "eligible=false\n")

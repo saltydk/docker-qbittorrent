@@ -4,13 +4,17 @@ from dataclasses import replace
 from io import StringIO
 import json
 from pathlib import Path
-import subprocess
+
+# Tests construct CompletedProcess results without launching subprocesses.
+import subprocess  # nosec B404
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import patch
 
 from scripts.manage_builds import (
     ArtifactTarget,
     BuildInputError,
+    HttpClient,
     LiveProvider,
     VariantState,
     build_matrices,
@@ -26,12 +30,24 @@ from scripts.manage_builds import (
     prepare_updates,
     image_inputs_digest,
 )
-from scripts.package_locks import BaseUpdateRequired, LockError, PackageLock, requests_digest
+from scripts.package_locks import (
+    BaseUpdateRequired,
+    LockError,
+    PackageLock,
+    requests_digest,
+)
 
 
 BASE_REPOSITORY = "saltydk/alpine-s6overlay"
 BASE_OLD = f"{BASE_REPOSITORY}:sha-{'1' * 40}@sha256:{'1' * 64}"
 BASE_NEW = f"{BASE_REPOSITORY}:sha-{'2' * 40}@sha256:{'2' * 64}"
+VARIANTS = ("libtorrent1", "libtorrent2", "libtorrent21", "legacy")
+RELEASES = {
+    "libtorrent1": "release-5.2.3_v1.2.20",
+    "libtorrent2": "release-5.2.3_v2.0.14",
+    "libtorrent21": "release-5.3.0_v2.1.2",
+    "legacy": "release-4.3.9_v1.2.20",
+}
 
 
 def base_metadata(
@@ -62,18 +78,22 @@ def base_metadata(
 
 def state(
     name: str = "libtorrent1",
-    release: str = "release-5.2.3_v1.2.20",
+    release: str | None = None,
     revision: int = 5,
     amd64: str = "a" * 64,
     arm64: str = "b" * 64,
     base_image: str = BASE_OLD,
 ) -> VariantState:
-    repository = "userdocs/qbittorrent-nox-static-legacy" if name == "legacy" else "userdocs/qbittorrent-nox-static"
+    repository = (
+        "userdocs/qbittorrent-nox-static-legacy"
+        if name == "legacy"
+        else "userdocs/qbittorrent-nox-static"
+    )
     return VariantState(
         name=name,
         dockerfile=f"Dockerfile.{name}",
         repository=repository,
-        release=release,
+        release=release or RELEASES[name],
         revision=revision,
         sha256_amd64=amd64,
         sha256_arm64=arm64,
@@ -94,7 +114,12 @@ class ComputeUpdateTests(unittest.TestCase):
 
     def test_base_change_keeps_upstream_revision(self) -> None:
         current = state()
-        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
+        target = ArtifactTarget(
+            current.release,
+            current.revision,
+            current.sha256_amd64,
+            current.sha256_arm64,
+        )
 
         decision = compute_update(current, target, BASE_NEW, packages_changed=False)
 
@@ -122,7 +147,12 @@ class ComputeUpdateTests(unittest.TestCase):
 
     def test_package_only_update_counts_as_a_tracked_input_change(self) -> None:
         current = state()
-        target = ArtifactTarget(current.release, current.revision, current.sha256_amd64, current.sha256_arm64)
+        target = ArtifactTarget(
+            current.release,
+            current.revision,
+            current.sha256_amd64,
+            current.sha256_arm64,
+        )
 
         decision = compute_update(current, target, BASE_OLD, packages_changed=True)
 
@@ -139,8 +169,8 @@ FROM ${{BASE_IMAGE}}
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
 ARG QBITTORRENT_REVISION="5"
-ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
-ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
+ARG QBITTORRENT_SHA256_AMD64="{"a" * 64}"
+ARG QBITTORRENT_SHA256_ARM64="{"b" * 64}"
 '''
 
         current = parse_variant("libtorrent1", "Dockerfile.libtorrent1", text)
@@ -150,35 +180,41 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
         self.assertEqual(current, state())
         self.assertIn(f'ARG BASE_IMAGE="{BASE_NEW}"', rendered)
         self.assertIn('ARG QBITTORRENT_REVISION="5"', rendered)
-        self.assertEqual(parse_variant("libtorrent1", "Dockerfile.libtorrent1", rendered), updated)
+        self.assertEqual(
+            parse_variant("libtorrent1", "Dockerfile.libtorrent1", rendered), updated
+        )
 
     def test_missing_required_argument_fails_closed(self) -> None:
         with self.assertRaisesRegex(BuildInputError, "QBITTORRENT_RELEASE"):
-            parse_variant("libtorrent1", "Dockerfile.libtorrent1", 'ARG BASE_IMAGE="alpine"\n')
+            parse_variant(
+                "libtorrent1", "Dockerfile.libtorrent1", 'ARG BASE_IMAGE="alpine"\n'
+            )
 
     def test_parse_rejects_base_without_source_sha_tag(self) -> None:
-        text = f'''ARG BASE_IMAGE="saltydk/alpine-s6overlay:latest@sha256:{'1' * 64}"
+        text = f'''ARG BASE_IMAGE="saltydk/alpine-s6overlay:latest@sha256:{"1" * 64}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
 ARG QBITTORRENT_REVISION="5"
-ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
-ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
+ARG QBITTORRENT_SHA256_AMD64="{"a" * 64}"
+ARG QBITTORRENT_SHA256_ARM64="{"b" * 64}"
 '''
 
-        with self.assertRaisesRegex(BuildInputError, "source SHA tag and manifest digest"):
+        with self.assertRaisesRegex(
+            BuildInputError, "source SHA tag and manifest digest"
+        ):
             parse_variant("libtorrent1", "Dockerfile.libtorrent1", text)
 
     def test_load_states_rejects_mismatched_base_images(self) -> None:
-        template = '''ARG BASE_IMAGE="{base}"
+        template = """ARG BASE_IMAGE="{base}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
 ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{amd64}"
 ARG QBITTORRENT_SHA256_ARM64="{arm64}"
-'''
+"""
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            for index, name in enumerate(("libtorrent1", "libtorrent2", "legacy"), start=1):
+            for index, name in enumerate(VARIANTS, start=1):
                 (root / f"Dockerfile.{name}").write_text(
                     template.format(
                         base=BASE_OLD if index < 3 else BASE_NEW,
@@ -196,8 +232,8 @@ ARG QBITTORRENT_SHA256_ARM64="{arm64}"
 ARG QBITTORRENT_REPOSITORY="userdocs/qbittorrent-nox-static"
 ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
 ARG QBITTORRENT_REVISION="5"
-ARG QBITTORRENT_SHA256_AMD64="{'a' * 64}"
-ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
+ARG QBITTORRENT_SHA256_AMD64="{"a" * 64}"
+ARG QBITTORRENT_SHA256_ARM64="{"b" * 64}"
 '''
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -212,7 +248,11 @@ ARG QBITTORRENT_SHA256_ARM64="{'b' * 64}"
 
             write_updates(root, {"libtorrent1": decision})
 
-            updated = parse_variant("libtorrent1", "Dockerfile.libtorrent1", path.read_text(encoding="utf-8"))
+            updated = parse_variant(
+                "libtorrent1",
+                "Dockerfile.libtorrent1",
+                path.read_text(encoding="utf-8"),
+            )
             self.assertEqual(updated, decision.state)
 
 
@@ -244,51 +284,104 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(extract_asset_checksums(release), ("a" * 64, "b" * 64))
 
     def test_missing_supported_asset_fails_closed(self) -> None:
-        release = {"assets": [{"name": "x86_64-qbittorrent-nox", "digest": "sha256:" + "a" * 64}]}
+        release = {
+            "assets": [
+                {"name": "x86_64-qbittorrent-nox", "digest": "sha256:" + "a" * 64}
+            ]
+        }
 
         with self.assertRaisesRegex(BuildInputError, "aarch64"):
             extract_asset_checksums(release)
 
-    def test_live_provider_resolves_three_two_architecture_targets(self) -> None:
+    def test_live_provider_resolves_four_two_architecture_targets(self) -> None:
         def release(amd64: str, arm64: str):
             return {
                 "assets": [
-                    {"name": "x86_64-qbittorrent-nox", "digest": "sha256:" + amd64 * 64},
-                    {"name": "aarch64-qbittorrent-nox", "digest": "sha256:" + arm64 * 64},
+                    {
+                        "name": "x86_64-qbittorrent-nox",
+                        "digest": "sha256:" + amd64 * 64,
+                    },
+                    {
+                        "name": "aarch64-qbittorrent-nox",
+                        "digest": "sha256:" + arm64 * 64,
+                    },
                 ]
             }
 
-        responses = {
-            "https://github.com/userdocs/qbittorrent-nox-static/releases/latest/download/dependency-version.json": {
-                "qbittorrent": "5.2.3",
-                "libtorrent_1_2": "1.2.20",
-                "libtorrent_2_0": "2.0.14",
+        responses: dict[str, object] = {
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases?per_page=100&page=1": [
+                {
+                    "tag_name": "release-5.2.3_v1.2.20",
+                    "draft": False,
+                    "prerelease": True,
+                },
+                {
+                    "tag_name": "release-5.2.3_v2.0.14",
+                    "draft": False,
+                    "prerelease": True,
+                },
+                {
+                    "tag_name": "release-5.3.0_v2.1.2",
+                    "draft": False,
+                    "prerelease": False,
+                },
+            ],
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.2.3_v1.2.20/dependency-version.json": {
+                "revision": "5"
             },
-            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.2.3_v1.2.20/dependency-version.json": {"revision": "5"},
-            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.2.3_v2.0.14/dependency-version.json": {"revision": "4"},
-            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/tags/release-5.2.3_v1.2.20": release("a", "b"),
-            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/tags/release-5.2.3_v2.0.14": release("c", "d"),
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.2.3_v2.0.14/dependency-version.json": {
+                "revision": "4"
+            },
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.3.0_v2.1.2/dependency-version.json": {
+                "revision": "0"
+            },
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/tags/release-5.2.3_v1.2.20": release(
+                "a", "b"
+            ),
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/tags/release-5.2.3_v2.0.14": release(
+                "c", "d"
+            ),
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/tags/release-5.3.0_v2.1.2": release(
+                "1", "2"
+            ),
             "https://github.com/userdocs/qbittorrent-nox-static-legacy/releases/latest/download/dependency-version.json": {
                 "qbittorrent": "4.3.9",
                 "libtorrent_1_2": "1.2.20",
                 "revision": "7",
             },
-            "https://api.github.com/repos/userdocs/qbittorrent-nox-static-legacy/releases/tags/release-4.3.9_v1.2.20": release("e", "f"),
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static-legacy/releases/tags/release-4.3.9_v1.2.20": release(
+                "e", "f"
+            ),
         }
 
-        class Http:
+        class Http(HttpClient):
             def get_json(self, url, allow_not_found=False):
                 return responses[url]
 
-        provider = LiveProvider(Http(), lambda command: subprocess.CompletedProcess(command, 0, "", ""))
+        provider = LiveProvider(
+            Http(), lambda command: subprocess.CompletedProcess(command, 0, "", "")
+        )
         targets = provider.artifact_targets()
 
-        self.assertEqual(targets["libtorrent1"], ArtifactTarget("release-5.2.3_v1.2.20", 5, "a" * 64, "b" * 64))
-        self.assertEqual(targets["libtorrent2"], ArtifactTarget("release-5.2.3_v2.0.14", 4, "c" * 64, "d" * 64))
-        self.assertEqual(targets["legacy"], ArtifactTarget("release-4.3.9_v1.2.20", 7, "e" * 64, "f" * 64))
+        self.assertEqual(
+            targets["libtorrent1"],
+            ArtifactTarget("release-5.2.3_v1.2.20", 5, "a" * 64, "b" * 64),
+        )
+        self.assertEqual(
+            targets["libtorrent2"],
+            ArtifactTarget("release-5.2.3_v2.0.14", 4, "c" * 64, "d" * 64),
+        )
+        self.assertEqual(
+            targets["libtorrent21"],
+            ArtifactTarget("release-5.3.0_v2.1.2", 0, "1" * 64, "2" * 64),
+        )
+        self.assertEqual(
+            targets["legacy"],
+            ArtifactTarget("release-4.3.9_v1.2.20", 7, "e" * 64, "f" * 64),
+        )
 
     def test_live_provider_resolves_base_digest(self) -> None:
-        class Http:
+        class Http(HttpClient):
             def get_json(self, url, allow_not_found=False):
                 return {"name": "published"}
 
@@ -307,7 +400,9 @@ class SourceTests(unittest.TestCase):
                     '{"digest":"sha256:' + "2" * 64 + '"}',
                     "",
                 )
-            return subprocess.CompletedProcess(command, 0, "openssl-3.5.7-r0 < 3.5.8-r0\n", "")
+            return subprocess.CompletedProcess(
+                command, 0, "openssl-3.5.7-r0 < 3.5.8-r0\n", ""
+            )
 
         provider = LiveProvider(Http(), runner)
 
@@ -328,7 +423,7 @@ class SourceTests(unittest.TestCase):
                 "",
             )
 
-        provider = LiveProvider(object(), runner)
+        provider = LiveProvider(HttpClient(), runner)
 
         with self.assertRaisesRegex(BuildInputError, "linux/arm/v7 metadata"):
             provider.base_image()
@@ -340,7 +435,7 @@ class SourceTests(unittest.TestCase):
         def runner(command):
             return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
 
-        provider = LiveProvider(object(), runner)
+        provider = LiveProvider(HttpClient(), runner)
 
         with self.assertRaisesRegex(BuildInputError, "linux/arm64 labels is missing"):
             provider.base_image()
@@ -360,7 +455,7 @@ class SourceTests(unittest.TestCase):
                 "",
             )
 
-        provider = LiveProvider(object(), runner)
+        provider = LiveProvider(HttpClient(), runner)
 
         with self.assertRaisesRegex(BuildInputError, "do not share one OCI revision"):
             provider.base_image()
@@ -371,9 +466,11 @@ class SourceTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, base_metadata(), "")
             return subprocess.CompletedProcess(command, 1, "", "manifest unknown")
 
-        provider = LiveProvider(object(), runner)
+        provider = LiveProvider(HttpClient(), runner)
 
-        with self.assertRaisesRegex(BuildInputError, "failed to inspect base image SHA tag"):
+        with self.assertRaisesRegex(
+            BuildInputError, "failed to inspect base image SHA tag"
+        ):
             provider.base_image()
 
     def test_base_resolution_rejects_sha_tag_digest_mismatch(self) -> None:
@@ -387,30 +484,50 @@ class SourceTests(unittest.TestCase):
                 "",
             )
 
-        provider = LiveProvider(object(), runner)
+        provider = LiveProvider(HttpClient(), runner)
 
-        with self.assertRaisesRegex(BuildInputError, "does not match the latest manifest digest"):
+        with self.assertRaisesRegex(
+            BuildInputError, "does not match the latest manifest digest"
+        ):
             provider.base_image()
 
 
 class MatrixTests(unittest.TestCase):
     def test_changed_paths_select_only_affected_variants(self) -> None:
         self.assertEqual(select_variants(["Dockerfile.libtorrent2"]), ("libtorrent2",))
-        self.assertEqual(select_variants(["root-legacy/etc/cont-init.d/10-config"]), ("legacy",))
-        self.assertEqual(select_variants(["root/etc/services.d/qbittorrent/run"]), ("libtorrent1", "libtorrent2", "legacy"))
-        self.assertEqual(select_variants([".github/workflows/security-scan.yml"]), ("libtorrent1", "libtorrent2", "legacy"))
-        self.assertEqual(select_variants(["packages/runtime/aarch64.lock"]), ("libtorrent1", "libtorrent2", "legacy"))
+        self.assertEqual(
+            select_variants(["Dockerfile.libtorrent21"]), ("libtorrent21",)
+        )
+        self.assertEqual(
+            select_variants(["root-legacy/etc/cont-init.d/10-config"]), ("legacy",)
+        )
+        self.assertEqual(
+            select_variants(["root/etc/services.d/qbittorrent/run"]), VARIANTS
+        )
+        self.assertEqual(
+            select_variants([".github/workflows/security-scan.yml"]), VARIANTS
+        )
+        self.assertEqual(select_variants(["packages/runtime/aarch64.lock"]), VARIANTS)
 
     def test_build_matrices_preserve_aliases_and_expand_platforms(self) -> None:
-        states = {name: state(name=name) for name in ("libtorrent1", "libtorrent2", "legacy")}
+        states = {name: state(name=name) for name in VARIANTS}
 
-        matrices = build_matrices(states, ("libtorrent1", "libtorrent2"))
+        matrices = cast(
+            dict[str, dict[str, list[dict[str, object]]]],
+            build_matrices(states, VARIANTS),
+        )
 
-        self.assertEqual(len(matrices["candidates"]["include"]), 4)
-        self.assertEqual(len(matrices["publish"]["include"]), 2)
-        self.assertEqual(matrices["candidates"]["include"][0]["qbittorrent_version"], "5.2.3")
-        self.assertEqual(matrices["candidates"]["include"][0]["libtorrent_prefix"], "1.2.")
-        self.assertEqual(matrices["candidates"]["include"][0]["config_profile"], "modern")
+        self.assertEqual(len(matrices["candidates"]["include"]), 8)
+        self.assertEqual(len(matrices["publish"]["include"]), 4)
+        self.assertEqual(
+            matrices["candidates"]["include"][0]["qbittorrent_version"], "5.2.3"
+        )
+        self.assertEqual(
+            matrices["candidates"]["include"][0]["libtorrent_prefix"], "1.2."
+        )
+        self.assertEqual(
+            matrices["candidates"]["include"][0]["config_profile"], "modern"
+        )
         self.assertEqual(
             matrices["publish"]["include"][0]["tags"],
             [
@@ -420,22 +537,46 @@ class MatrixTests(unittest.TestCase):
                 "saltydk/qbittorrent:latest",
             ],
         )
-        self.assertNotIn("saltydk/qbittorrent:latest", matrices["publish"]["include"][1]["tags"])
+        self.assertEqual(
+            matrices["publish"]["include"][2]["tags"],
+            [
+                "saltydk/qbittorrent:release-5.3.0_v2.1.2-5",
+                "saltydk/qbittorrent:release-5.3.0_v2.1.2",
+                "saltydk/qbittorrent:libtorrent21",
+            ],
+        )
+        for publication in matrices["publish"]["include"]:
+            with self.subTest(variant=publication["variant"]):
+                self.assertEqual(
+                    "saltydk/qbittorrent:latest"
+                    in cast(list[str], publication["tags"]),
+                    publication["variant"] == "libtorrent1",
+                )
 
     def test_matrix_cli_emits_candidate_and_publish_matrices(self) -> None:
-        template = '''ARG BASE_IMAGE="{base}"
+        template = """ARG BASE_IMAGE="{base}"
 ARG QBITTORRENT_REPOSITORY="{repository}"
-ARG QBITTORRENT_RELEASE="release-5.2.3_v1.2.20"
+ARG QBITTORRENT_RELEASE="{release}"
 ARG QBITTORRENT_REVISION="5"
 ARG QBITTORRENT_SHA256_AMD64="{amd64}"
 ARG QBITTORRENT_SHA256_ARM64="{arm64}"
-'''
+"""
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("libtorrent1", "libtorrent2", "legacy"):
-                repository = "userdocs/qbittorrent-nox-static-legacy" if name == "legacy" else "userdocs/qbittorrent-nox-static"
+            for name in VARIANTS:
+                repository = (
+                    "userdocs/qbittorrent-nox-static-legacy"
+                    if name == "legacy"
+                    else "userdocs/qbittorrent-nox-static"
+                )
                 (root / f"Dockerfile.{name}").write_text(
-                    template.format(base=BASE_OLD, repository=repository, amd64="a" * 64, arm64="b" * 64),
+                    template.format(
+                        base=BASE_OLD,
+                        repository=repository,
+                        release=RELEASES[name],
+                        amd64="a" * 64,
+                        arm64="b" * 64,
+                    ),
                     encoding="utf-8",
                 )
             output = StringIO()
@@ -445,9 +586,9 @@ ARG QBITTORRENT_SHA256_ARM64="{arm64}"
 
             report = json.loads(output.getvalue())
             self.assertEqual(result, 0)
-            self.assertEqual(report["selected"], ["libtorrent1", "libtorrent2", "legacy"])
-            self.assertEqual(len(report["candidates"]["include"]), 6)
-            self.assertEqual(len(report["publish"]["include"]), 3)
+            self.assertEqual(report["selected"], list(VARIANTS))
+            self.assertEqual(len(report["candidates"]["include"]), 8)
+            self.assertEqual(len(report["publish"]["include"]), 4)
 
 
 class LockedUpdateTests(unittest.TestCase):
@@ -456,7 +597,7 @@ class LockedUpdateTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         source = Path(__file__).resolve().parents[1]
-        for name in ("libtorrent1", "libtorrent2", "legacy"):
+        for name in VARIANTS:
             text = (source / f"Dockerfile.{name}").read_text()
             current = parse_variant(name, f"Dockerfile.{name}", text)
             (self.root / current.dockerfile).write_text(render_variant(text, current))
@@ -468,44 +609,74 @@ class LockedUpdateTests(unittest.TestCase):
         self.published = True
         self.version = "5.8.3-r0"
         outer = self
-        class Provider:
+
+        class Provider(LiveProvider):
+            def __init__(self) -> None:
+                super().__init__(HttpClient())
+
             def artifact_targets(self):
-                return {name: ArtifactTarget(s.release, s.revision, s.sha256_amd64, s.sha256_arm64)
-                        for name, s in outer.states.items()}
+                return {
+                    name: ArtifactTarget(
+                        s.release, s.revision, s.sha256_amd64, s.sha256_arm64
+                    )
+                    for name, s in outer.states.items()
+                }
+
             def base_image(self):
                 return outer.parent
+
             def is_current(self, variant, input_sha):
                 return outer.published
+
         self.provider = Provider()
 
     def resolve(self, root, profile, platform, parent, **kwargs):
         architecture = "x86_64" if platform == "linux/amd64" else "aarch64"
-        return PackageLock(architecture, parent, requests_digest(("xz",)),
-                           {"xz": self.version, "xz-libs": self.version})
+        return PackageLock(
+            architecture,
+            parent,
+            requests_digest(("xz",)),
+            {"xz": self.version, "xz-libs": self.version},
+        )
 
     def test_package_updates_are_committed_inputs_without_revision_bumps(self):
         initial = prepare_updates(self.root, self.provider, resolver=self.resolve)
         initial.write()
         self.version = "5.8.4-r0"
         plan = prepare_updates(self.root, self.provider, resolver=self.resolve)
-        self.assertEqual(plan.report["changed"], ["libtorrent1", "libtorrent2", "legacy"])
-        self.assertEqual(plan.report["images"][0]["changes"], [
-            {"name": "xz", "old": "5.8.3-r0", "new": "5.8.4-r0"},
-            {"name": "xz-libs", "old": "5.8.3-r0", "new": "5.8.4-r0"},
-        ])
+        self.assertEqual(plan.report["changed"], list(VARIANTS))
+        self.assertEqual(
+            cast(list[dict[str, object]], plan.report["images"])[0]["changes"],
+            [
+                {"name": "xz", "old": "5.8.3-r0", "new": "5.8.4-r0"},
+                {"name": "xz-libs", "old": "5.8.3-r0", "new": "5.8.4-r0"},
+            ],
+        )
         plan.write()
-        self.assertIn("xz=5.8.4-r0", (self.root / "packages/runtime/x86_64.lock").read_text())
-        self.assertEqual(load_states(self.root)["libtorrent1"].revision, self.states["libtorrent1"].revision)
-        self.assertEqual(prepare_updates(self.root, self.provider, resolver=self.resolve).report["status"], "no-changes")
+        self.assertIn(
+            "xz=5.8.4-r0", (self.root / "packages/runtime/x86_64.lock").read_text()
+        )
+        self.assertEqual(
+            load_states(self.root)["libtorrent1"].revision,
+            self.states["libtorrent1"].revision,
+        )
+        self.assertEqual(
+            prepare_updates(self.root, self.provider, resolver=self.resolve).report[
+                "status"
+            ],
+            "no-changes",
+        )
 
     def test_failed_architecture_resolution_does_not_write_any_inputs(self):
         prepare_updates(self.root, self.provider, resolver=self.resolve).write()
         original = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         self.version = "5.8.4-r0"
+
         def fail_arm(root, profile, platform, parent, **kwargs):
             if platform == "linux/arm64":
                 raise LockError("repository unavailable")
             return self.resolve(root, profile, platform, parent, **kwargs)
+
         with self.assertRaisesRegex(LockError, "unavailable"):
             prepare_updates(self.root, self.provider, resolver=fail_arm).write()
         self.assertEqual({p: p.read_bytes() for p in original}, original)
@@ -517,7 +688,9 @@ class LockedUpdateTests(unittest.TestCase):
 
         def resolve_with_base_conflict(root, profile, platform, parent, **kwargs):
             if platform == "linux/arm64":
-                raise BaseUpdateRequired("base update required: inherited package constraints conflict")
+                raise BaseUpdateRequired(
+                    "base update required: inherited package constraints conflict"
+                )
             return self.resolve(root, profile, platform, parent, **kwargs)
 
         def prepare(root, provider):
@@ -525,32 +698,67 @@ class LockedUpdateTests(unittest.TestCase):
 
         report_path = self.root / "update-report.json"
         output_path = self.root / "github-output"
-        with patch("scripts.manage_builds.LiveProvider", return_value=self.provider), \
-                patch("scripts.manage_builds.prepare_updates", side_effect=prepare), \
-                redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-            result = main(["--root", str(self.root), "update", "--write",
-                           "--report", str(report_path), "--github-output", str(output_path)])
+        with (
+            patch("scripts.manage_builds.LiveProvider", return_value=self.provider),
+            patch("scripts.manage_builds.prepare_updates", side_effect=prepare),
+            redirect_stdout(StringIO()),
+            redirect_stderr(StringIO()),
+        ):
+            result = main(
+                [
+                    "--root",
+                    str(self.root),
+                    "update",
+                    "--write",
+                    "--report",
+                    str(report_path),
+                    "--github-output",
+                    str(output_path),
+                ]
+            )
 
         self.assertEqual(result, 4)
         self.assertEqual({p: p.read_bytes() for p in original}, original)
-        self.assertEqual(json.loads(report_path.read_text())["status"], "waiting-for-base")
-        outputs = dict(line.split("=", 1) for line in output_path.read_text().splitlines())
+        self.assertEqual(
+            json.loads(report_path.read_text())["status"], "waiting-for-base"
+        )
+        outputs = dict(
+            line.split("=", 1) for line in output_path.read_text().splitlines()
+        )
         self.assertEqual(outputs["waiting-for-base"], "true")
         self.assertEqual(outputs["changed"], "false")
         self.assertEqual(outputs["rebuild"], "false")
         self.assertEqual(json.loads(outputs["rebuild-variants"]), [])
 
     def test_update_reports_other_resolution_failures_as_errors(self):
-        for error in (LockError("repository unavailable"), BuildInputError("failed to fetch: HTTP 503")):
+        for error in (
+            LockError("repository unavailable"),
+            BuildInputError("failed to fetch: HTTP 503"),
+        ):
             with self.subTest(error=error):
                 output_path = self.root / "github-output"
                 report_path = self.root / "update-report.json"
-                with patch("scripts.manage_builds.prepare_updates", side_effect=error), \
-                        redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                    result = main(["--root", str(self.root), "update", "--write",
-                                   "--report", str(report_path), "--github-output", str(output_path)])
+                with (
+                    patch("scripts.manage_builds.prepare_updates", side_effect=error),
+                    redirect_stdout(StringIO()),
+                    redirect_stderr(StringIO()),
+                ):
+                    result = main(
+                        [
+                            "--root",
+                            str(self.root),
+                            "update",
+                            "--write",
+                            "--report",
+                            str(report_path),
+                            "--github-output",
+                            str(output_path),
+                        ]
+                    )
                 self.assertEqual(result, 1)
-                self.assertEqual(json.loads(report_path.read_text())["status"], "failed")
+                self.assertEqual(
+                    json.loads(report_path.read_text())["status"], "failed"
+                )
                 self.assertFalse(output_path.exists())
 
     def test_pending_publication_retries_without_an_empty_input_commit(self):
@@ -559,7 +767,7 @@ class LockedUpdateTests(unittest.TestCase):
         plan = prepare_updates(self.root, self.provider, resolver=self.resolve)
         self.assertEqual(plan.report["status"], "pending-publication")
         self.assertEqual(plan.report["changed"], [])
-        self.assertEqual(plan.report["rebuild"], ["libtorrent1", "libtorrent2", "legacy"])
+        self.assertEqual(plan.report["rebuild"], list(VARIANTS))
         self.assertEqual(plan.files, {})
 
     def test_publication_identity_ignores_docs_and_other_variant_changes(self):
@@ -575,14 +783,19 @@ class LockedUpdateTests(unittest.TestCase):
 
     def test_unknown_or_duplicate_matrix_variants_fail(self):
         from contextlib import redirect_stderr
-        for value in ('["unknown"]', '["legacy", "legacy"]', '{}', 'broken'):
+
+        for value in ('["unknown"]', '["legacy", "legacy"]', "{}", "broken"):
             with self.subTest(value=value), redirect_stderr(StringIO()):
-                self.assertEqual(main(["--root", str(self.root), "matrix", "--variants", value]), 1)
+                self.assertEqual(
+                    main(["--root", str(self.root), "matrix", "--variants", value]), 1
+                )
 
     def test_explicit_matrix_selection_builds_only_requested_variants(self):
         output = StringIO()
         with redirect_stdout(output):
-            result = main(["--root", str(self.root), "matrix", "--variants", '["legacy"]'])
+            result = main(
+                ["--root", str(self.root), "matrix", "--variants", '["legacy"]']
+            )
         self.assertEqual(result, 0)
         report = json.loads(output.getvalue())
         self.assertEqual(report["selected"], ["legacy"])
@@ -590,16 +803,26 @@ class LockedUpdateTests(unittest.TestCase):
 
     def test_referenced_artifact_verification_never_looks_up_latest(self):
         variant = self.states["legacy"]
-        class Http:
+
+        class Http(HttpClient):
             def get_json(self, url, allow_not_found=False):
                 if "/latest" in url:
                     raise AssertionError("verification must use the committed release")
                 if url.endswith("dependency-version.json"):
                     return {"revision": str(variant.revision)}
-                return {"assets": [
-                    {"name": "x86_64-qbittorrent-nox", "digest": "sha256:" + variant.sha256_amd64},
-                    {"name": "aarch64-qbittorrent-nox", "digest": "sha256:" + variant.sha256_arm64},
-                ]}
+                return {
+                    "assets": [
+                        {
+                            "name": "x86_64-qbittorrent-nox",
+                            "digest": "sha256:" + variant.sha256_amd64,
+                        },
+                        {
+                            "name": "aarch64-qbittorrent-nox",
+                            "digest": "sha256:" + variant.sha256_arm64,
+                        },
+                    ]
+                }
+
         provider = LiveProvider(Http())
         targets = provider.referenced_targets({"legacy": variant})
         validate_artifact_inputs({"legacy": variant}, targets)
@@ -616,15 +839,25 @@ class LockedUpdateTests(unittest.TestCase):
             ("arm64 checksum", replace(current, sha256_arm64="b" * 64), 1),
         )
         for description, target, expected in cases:
-            with self.subTest(description=description), patch("scripts.manage_builds.LiveProvider") as provider:
-                provider.return_value.referenced_targets.return_value = {**targets, "libtorrent1": target}
+            with (
+                self.subTest(description=description),
+                patch("scripts.manage_builds.LiveProvider") as provider,
+            ):
+                provider.return_value.referenced_targets.return_value = {
+                    **targets,
+                    "libtorrent1": target,
+                }
                 with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                    self.assertEqual(main(["--root", str(self.root), "verify"]), expected)
+                    self.assertEqual(
+                        main(["--root", str(self.root), "verify"]), expected
+                    )
 
     def test_version_mismatch_does_not_hide_another_variants_checksum_failure(self):
         prepare_updates(self.root, self.provider, resolver=self.resolve).write()
         targets = self.provider.artifact_targets()
-        targets["libtorrent1"] = replace(targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1)
+        targets["libtorrent1"] = replace(
+            targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1
+        )
         targets["libtorrent2"] = replace(targets["libtorrent2"], sha256_amd64="a" * 64)
         error = StringIO()
         with patch("scripts.manage_builds.LiveProvider") as provider:
@@ -637,7 +870,9 @@ class LockedUpdateTests(unittest.TestCase):
         prepare_updates(self.root, self.provider, resolver=self.resolve).write()
         (self.root / "packages/runtime/requested.txt").write_text("xz\ncurl\n")
         targets = self.provider.artifact_targets()
-        targets["libtorrent1"] = replace(targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1)
+        targets["libtorrent1"] = replace(
+            targets["libtorrent1"], revision=targets["libtorrent1"].revision + 1
+        )
         with patch("scripts.manage_builds.LiveProvider") as provider:
             provider.return_value.referenced_targets.return_value = targets
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
@@ -647,7 +882,9 @@ class LockedUpdateTests(unittest.TestCase):
     def test_verify_keeps_upstream_request_failures_as_errors(self):
         prepare_updates(self.root, self.provider, resolver=self.resolve).write()
         with patch("scripts.manage_builds.LiveProvider") as provider:
-            provider.return_value.referenced_targets.side_effect = BuildInputError("failed to fetch: HTTP 503")
+            provider.return_value.referenced_targets.side_effect = BuildInputError(
+                "failed to fetch: HTTP 503"
+            )
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 self.assertEqual(main(["--root", str(self.root), "verify"]), 1)
 

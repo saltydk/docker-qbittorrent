@@ -6,11 +6,18 @@ import argparse
 import json
 import re
 import shutil
-import subprocess  # nosec B404 - only a shell-free Docker manifest inspection below.
+
+# Only shell-free Docker manifest inspections use subprocess.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
-VARIANTS = {"libtorrent1", "libtorrent2", "legacy"}
+# Support both direct script execution and module invocation in CI.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.manage_builds import VARIANT_ORDER
+
 ARCHITECTURES = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"saltydk/qbittorrent@sha256:[0-9a-f]{64}\Z")
@@ -30,7 +37,7 @@ def select_targets(raw: str, output: Path) -> dict[str, str]:
                 "platform": platform,
                 "image": f"saltydk/qbittorrent:{variant}",
             }
-            for variant in sorted(VARIANTS)
+            for variant in sorted(VARIANT_ORDER)
             for platform in ARCHITECTURES
         ]
         return {
@@ -43,7 +50,9 @@ def select_targets(raw: str, output: Path) -> dict[str, str]:
         not isinstance(images, dict)
         or not images
         or not all(
-            variant in VARIANTS and isinstance(image, str) and IMAGE.fullmatch(image)
+            variant in VARIANT_ORDER
+            and isinstance(image, str)
+            and IMAGE.fullmatch(image)
             for variant, image in images.items()
         )
     ):
@@ -93,7 +102,7 @@ def read_targets(path: Path) -> list[dict[str, str]]:
         name, platform, image = target["name"], target["platform"], target["image"]
         if (
             not isinstance(name, str)
-            or name not in VARIANTS
+            or name not in VARIANT_ORDER
             or not isinstance(platform, str)
             or platform not in ARCHITECTURES
         ):
@@ -117,8 +126,8 @@ def current_digest(reference: str) -> str:
     executable = shutil.which("docker")
     if executable is None:
         raise ValueError("required Docker executable is unavailable")
-    # read_targets accepts only the fixed repository's supported variant aliases.
-    completed = subprocess.run(  # nosec B603 - resolved Docker and validated alias argv.
+    # read_targets validates the alias; resolved Docker receives argv without a shell.
+    completed = subprocess.run(  # nosec B603
         [
             executable,
             "buildx",
@@ -152,7 +161,7 @@ def check_scope(expected_targets: Path, output: Path) -> dict[str, str]:
     targets = read_targets(expected_targets)
     identities = {(target["name"], target["platform"]) for target in targets}
     complete = identities == {
-        (variant, platform) for variant in VARIANTS for platform in ARCHITECTURES
+        (variant, platform) for variant in VARIANT_ORDER for platform in ARCHITECTURES
     }
     reason = "" if complete else "only a subset of published variants was assessed"
     if complete:
