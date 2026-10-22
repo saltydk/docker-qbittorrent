@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: x86_64
-# parent: saltydk/alpine-s6overlay:sha-25c6aa62125f4a7b9abf63dde0c19b5c0c8e6449@sha256:20ebc903ec9a8ee3a1e10d3d3b88cfdd4ae14d1b438ad7cec79ad5bade9dc0d5
+# parent: saltydk/alpine-s6overlay:sha-914deac84d1cc470f3e55230e6ff49d6a7248776@sha256:7010e8c72bafa0b0e59f8e6134128c1f82d636434e25d32797baa08749a68426
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
@@ -10,8 +10,8 @@ alpine-keys=2.6-r0
 alpine-release=3.24.3-r0
 apk-tools=3.0.8-r0
 bash=5.3.9-r1
-bind-libs=9.20.29-r0
-bind-tools=9.20.29-r0
+bind-libs=9.20.30-r0
+bind-tools=9.20.30-r0
 brotli-libs=1.2.1-r0
 busybox=1.37.0-r31
 busybox-binsh=1.37.0-r31
