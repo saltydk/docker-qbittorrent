@@ -81,17 +81,26 @@ docker exec "$container" /bin/sh -ec '
   test "$(stat -c %u "/proc/$pid")" = 1000
 '
 
+preferences=$(docker exec "$container" curl -fsS \
+  --header 'Referer: http://127.0.0.1:8080' \
+  --cookie /tmp/qbittorrent-cookie \
+  http://127.0.0.1:8080/api/v2/app/preferences)
+[[ "$(printf '%s' "$preferences" | jq -r .max_connec)" == "-1" ]]
+[[ "$(printf '%s' "$preferences" | jq -r .resolve_peer_countries)" == "false" ]]
+
 config=/config/qBittorrent/qBittorrent.conf
 if [[ "$config_profile" == "legacy" ]]; then
   docker exec "$container" grep -Fq 'Downloads\SavePath=' "$config"
+  docker exec "$container" grep -Fq 'WebUI\Port=' "$config"
   if docker exec "$container" grep -Fq 'Session\DefaultSavePath=' "$config"; then
     echo "legacy config contains a modern save-path key" >&2
     exit 1
   fi
 else
   docker exec "$container" grep -Fq 'Session\DefaultSavePath=' "$config"
-  if docker exec "$container" grep -Fq 'Downloads\SavePath=' "$config"; then
-    echo "modern config contains a legacy save-path key" >&2
+  docker exec "$container" grep -Fxq '[WebUI]' "$config"
+  if docker exec "$container" grep -Eq '^(Downloads\\SavePath|WebUI\\Port|Bittorrent\\MaxConnecs)=' "$config"; then
+    echo "modern config contains a legacy key" >&2
     exit 1
   fi
 fi
