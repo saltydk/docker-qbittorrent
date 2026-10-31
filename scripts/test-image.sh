@@ -87,6 +87,9 @@ preferences=$(docker exec "$container" curl -fsS \
   http://127.0.0.1:8080/api/v2/app/preferences)
 [[ "$(printf '%s' "$preferences" | jq -r .max_connec)" == "-1" ]]
 [[ "$(printf '%s' "$preferences" | jq -r .resolve_peer_countries)" == "false" ]]
+[[ "$(printf '%s' "$preferences" | jq -r .upnp)" == "false" ]]
+[[ "$(printf '%s' "$preferences" | jq -r .listen_port)" == "56881" ]]
+[[ "$(printf '%s' "$preferences" | jq -r .preallocate_all)" == "true" ]]
 
 config=/config/qBittorrent/qBittorrent.conf
 if [[ "$config_profile" == "legacy" ]]; then
