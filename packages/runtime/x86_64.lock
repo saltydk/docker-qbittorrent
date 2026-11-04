@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: x86_64
-# parent: saltydk/alpine-s6overlay:sha-2cc192ce2bd7a09d1be8adf205eb1ca76c3fb530@sha256:9945ca11d3cea899405293aa3efac4d48ca0d7450e812a34e03416061b87d75d
+# parent: saltydk/alpine-s6overlay:sha-a54818d29222f4a73a00e274ac2d71177f18efb1@sha256:088086d8ba85ba2eb8f1183be5338dcb62ab2a54e0df52bf2782a906486d0cbf
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
@@ -8,7 +8,7 @@ alpine-baselayout=3.7.2-r1
 alpine-baselayout-data=3.7.2-r1
 alpine-keys=2.6-r0
 alpine-release=3.24.3-r0
-apk-tools=3.0.8-r0
+apk-tools=3.0.9-r0
 bash=5.3.9-r1
 bind-libs=9.20.30-r0
 bind-tools=9.20.30-r0
@@ -32,7 +32,7 @@ json-c=0.18-r1
 keyutils-libs=1.6.3-r4
 krb5-conf=1.0-r2
 krb5-libs=1.22.2-r1
-libapk=3.0.8-r0
+libapk=3.0.9-r0
 libattr=2.5.2-r2
 libbsd=0.12.2-r0
 libbz2=1.0.8-r6
@@ -82,7 +82,7 @@ sqlite-libs=3.53.4-r0
 ssl_client=1.37.0-r31
 tar=1.35-r5
 tinyxml2=11.0.0-r0
-tzdata=2026e-r0
+tzdata=2026f-r0
 unzip=6.0-r16
 userspace-rcu=0.15.3-r0
 utmps-libs=0.1.3.3-r0
