@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: x86_64
-# parent: saltydk/alpine-s6overlay:sha-1b92b1d1e60a6ef37bf9162910ad3c96f9460375@sha256:526b3249bb85df476ac4689e56147ba60e8e92e907658daf884a28c22fb2fab0
+# parent: saltydk/alpine-s6overlay:sha-b38c8f15be1dbac0495c047e95fd2c0bb04ba9a4@sha256:58359813e48a22f19f8ae19b21092a84b109aae0a11be1766ca132dbfca12ead
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
@@ -37,7 +37,7 @@ libattr=2.5.2-r2
 libbsd=0.12.2-r0
 libbz2=1.0.8-r6
 libcom_err=1.47.4-r0
-libcrypto3=3.5.9-r0
+libcrypto3=3.5.9-r1
 libcurl=8.23.0-r0
 libexpat=2.10.0-r0
 libffi=3.5.2-r1
@@ -50,7 +50,7 @@ libncursesw=6.6_p20260516-r0
 libpanelw=6.6_p20260516-r0
 libproc2=4.0.6-r0
 libpsl=0.21.5-r3
-libssl3=3.5.9-r0
+libssl3=3.5.9-r1
 libstdc++=15.2.0-r5
 libunistring=1.4.2-r0
 libuv=1.52.1-r0
@@ -65,7 +65,7 @@ musl-utils=1.2.6-r3
 ncurses-terminfo-base=6.6_p20260516-r0
 nghttp2-libs=1.70.0-r0
 oniguruma=6.9.10-r0
-openssl=3.5.9-r0
+openssl=3.5.9-r1
 pcre2=10.49-r0
 procps-ng=4.0.6-r0
 protobuf-c=1.5.2-r2
