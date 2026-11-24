@@ -1,6 +1,6 @@
 # apk-lock: 1
 # architecture: x86_64
-# parent: saltydk/alpine-s6overlay:sha-b38c8f15be1dbac0495c047e95fd2c0bb04ba9a4@sha256:58359813e48a22f19f8ae19b21092a84b109aae0a11be1766ca132dbfca12ead
+# parent: saltydk/alpine-s6overlay:sha-1d1e83a0447c377a483c87b7bf70d4845e124ad1@sha256:d816844aa4fc5872fd1186c73b4d6b413aa112af842b50e0cf8d44cce931cf8d
 # requests-sha256: 441b3f3d4d68a277cc15c971403de38bd775bb0a54735db6c2652f9cf483d898
 7zip=26.01-r0
 acl-libs=2.3.2-r1
@@ -40,7 +40,7 @@ libcom_err=1.47.4-r0
 libcrypto3=3.5.9-r1
 libcurl=8.23.0-r0
 libexpat=2.10.0-r0
-libffi=3.5.2-r1
+libffi=3.8.1-r0
 libgcc=15.2.0-r5
 libidn2=2.3.8-r0
 libintl=1.0-r0
@@ -69,14 +69,15 @@ openssl=3.5.9-r1
 pcre2=10.49-r0
 procps-ng=4.0.6-r0
 protobuf-c=1.5.2-r2
-pyc=3.14.10-r1
-python3=3.14.10-r1
-python3-pyc=3.14.10-r1
-python3-pycache-pyc0=3.14.10-r1
+pyc=3.14.10-r2
+python3=3.14.10-r2
+python3-ndbm=3.14.10-r2
+python3-pyc=3.14.10-r2
+python3-pycache-pyc0=3.14.10-r2
 readline=8.3.3-r1
 scanelf=1.3.9-r1
 sed=4.9-r2
-shadow=4.18.0-r1
+shadow=4.20.4-r0
 skalibs-libs=2.15.0.0-r0
 sqlite-libs=3.53.4-r0
 ssl_client=1.37.0-r31
